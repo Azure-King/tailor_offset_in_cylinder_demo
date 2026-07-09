@@ -2,6 +2,7 @@
 #include "Sketch2DView.h"
 #include "BooleanOperations.h"
 #include "CurveOffset.h"
+#include "PeriodicClipper.h"
 
 // debug
 #include "third_party/tailor/test/polygon_io.h"
@@ -137,6 +138,23 @@ void FourViewContainer::setupViews() {
 	connect(m_mainView, &Sketch2DView::polylineModified, this, &FourViewContainer::runFullPipeline);
 	connect(m_mainView, &Sketch2DView::polygonModified, this, &FourViewContainer::runFullPipeline);
 	connect(m_mainView, &Sketch2DView::polygonColorChanged, this, &FourViewContainer::runFullPipeline);
+
+	// 边界线同步：任意视图拖拽边界线后，直接将边界位置同步到所有四个视图
+	auto syncBoundaries = [this](float left, float right) {
+		m_mainView->setBoundaryLines(left, right);
+		m_topRightView->setBoundaryLines(left, right);
+		m_bottomLeftView->setBoundaryLines(left, right);
+		m_bottomRightView->setBoundaryLines(left, right);
+		emit boundariesUpdated(left, right);
+		// 边界变更后，重新执行周期裁剪（如果已有规范化多边形）
+		if (!m_mergedFillArcs.empty()) {
+			refreshPeriodicClip();
+		}
+	};
+	connect(m_mainView, &Sketch2DView::boundariesChanged, this, syncBoundaries);
+	connect(m_topRightView, &Sketch2DView::boundariesChanged, this, syncBoundaries);
+	connect(m_bottomLeftView, &Sketch2DView::boundariesChanged, this, syncBoundaries);
+	connect(m_bottomRightView, &Sketch2DView::boundariesChanged, this, syncBoundaries);
 
 	// 第四视图偏置溯源交互：利用偏置器回调标记的 edgeTag 区分凸点弧/偏移弧/凹点弧
 	// 通过关系链 sourceEdgeId 直接追溯到原始输入边，绕过两次布尔运算的 ID 变化
@@ -1179,6 +1197,10 @@ void FourViewContainer::runFullPipeline() {
 	synchronizeViews();
 	// 执行完整流水线
 	processSelfIntersection();
+	// 周期裁剪步骤（规范化后 → 裁剪到圆柱带内）
+	if (!m_mergedFillArcs.empty()) {
+		processPeriodicClip();
+	}
 	if (!m_topRightView->selfIntersectionResults().isEmpty() || !m_topRightView->fillResults().isEmpty()) {
 		processCurveOffset(m_offsetDistanceSlider->value());
 		if (!m_bottomLeftView->offsetResults().isEmpty()) {
@@ -1189,4 +1211,61 @@ void FourViewContainer::runFullPipeline() {
 			}
 		}
 	}
+}
+
+// ==================== 周期裁剪步骤 ====================
+
+void FourViewContainer::processPeriodicClip() {
+	if (m_mergedFillArcs.empty()) {
+		return;
+	}
+
+	// 动态颜色调色板
+	static std::vector<QColor> s_colorPalette = {
+		QColor(255, 100, 100),   // 红色
+		QColor(100, 200, 100),   // 绿色
+		QColor(100, 100, 255),   // 蓝色
+		QColor(255, 200, 100),   // 橙色
+		QColor(200, 100, 255),   // 紫色
+		QColor(100, 255, 200),   // 青色
+		QColor(255, 150, 100),   // 橙红
+		QColor(150, 100, 255),   // 紫蓝
+	};
+
+	double bLeft = static_cast<double>(m_mainView->boundaryLeft());
+	double bRight = static_cast<double>(m_mainView->boundaryRight());
+
+	// Step 1: 周期裁剪到圆柱面内，得到各个分量
+	auto clippedArcs = tailor_visualization::PeriodicClipper::ClipToStrip(
+		m_mergedFillArcs, bLeft, bRight);
+
+	// --- View 6: 周期裁剪后的各分量 ---
+	QVector<Sketch2DView::OffsetResultPolygon> clippedResults;
+	for (size_t i = 0; i < clippedArcs.size(); ++i) {
+		QColor color = s_colorPalette[i % s_colorPalette.size()];
+		clippedResults.append(arcsToPolygon(clippedArcs[i], color));
+	}
+
+	// --- View 7: 所有裁剪分量求并集 ---
+	QVector<Sketch2DView::OffsetResultPolygon> mergedResults;
+	if (!clippedArcs.empty()) {
+		tailor_visualization::BooleanOperations boolOp;
+		for (const auto& arcs : clippedArcs) {
+			boolOp.AddSubjectPolygon(arcs);
+		}
+		auto mergedArcs = boolOp.ExecuteOnlySubjectPattern(
+			static_cast<const tailor_visualization::IFillType*>(nullptr));
+
+		for (size_t i = 0; i < mergedArcs.size(); ++i) {
+			QColor color = s_colorPalette[(i + clippedArcs.size()) % s_colorPalette.size()];
+			mergedResults.append(arcsToPolygon(mergedArcs[i], color));
+		}
+	}
+
+	emit periodicClipResultReady(clippedResults, mergedResults);
+}
+
+void FourViewContainer::refreshPeriodicClip() {
+	// 边界线变更后重新裁剪（复用已缓存的规范化多边形 m_mergedFillArcs）
+	processPeriodicClip();
 }

@@ -109,6 +109,13 @@ public:
     const QVector<OffsetResultPolygon>& fillResults() const { return m_fillResults; }
     void clearFillResults() { m_fillResults.clear(); update(); }
 
+    // Cylinder boundary lines (unwrapped width)
+    void setCylinderRadius(float r);
+    void setBoundaryLines(float left, float right);
+    float cylinderRadius() const { return m_cylinderRadius; }
+    float boundaryLeft() const { return m_boundaryLeft; }
+    float boundaryRight() const { return m_boundaryRight; }
+
     // Viewport state
     qreal scale() const { return m_scale; }
     QPointF offset() const { return m_offset; }
@@ -212,10 +219,12 @@ private:
     enum class DragMode {
         None,
         Vertex,
-        EdgeMidpoint
+        EdgeMidpoint,
+        Boundary
     };
     DragMode m_dragMode = DragMode::None;
     Edge m_draggedEdge;
+    int m_draggedBoundary = 0;  // -1 = left, +1 = right
     QPointF m_dragStartPos;
     QPointF m_originalPoint;
     int m_splitVertexIndex = -1;
@@ -228,6 +237,11 @@ private:
     // Viewport
     qreal m_scale = 1.0;
     QPointF m_offset;
+
+    // Cylinder boundary lines (unwrapped strip)
+    float m_cylinderRadius = 100.0f;
+    float m_boundaryLeft = -100.0f;
+    float m_boundaryRight = 100.0f;
 
     bool m_isPanning = false;
     QPointF m_panStart;
@@ -257,4 +271,7 @@ signals:
     // 结果边悬停信号：polygonIndex, edgeIndex, segmentId（当前阶段标记）, sourceEdgeId（关系链根节点）, bulge
     void resultEdgeHovered(int polygonIndex, int edgeIndex, int segmentId, int sourceEdgeId, qreal bulge);
     void resultEdgeHoverEnded();
+
+    // 边界线变更信号：直接传递左右边界位置（不再强制对称）
+    void boundariesChanged(float left, float right);
 };

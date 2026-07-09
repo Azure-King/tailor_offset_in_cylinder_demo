@@ -11,8 +11,7 @@
 #include <QHash>
 #include <vector>
 #include "BooleanOperations.h"
-
-class Sketch2DView;
+#include "Sketch2DView.h"
 
 class FourViewContainer : public QWidget {
     Q_OBJECT
@@ -36,6 +35,16 @@ signals:
     // 预留信号：曲线偏置操作触发
     void offsetOperationTriggered(double distance);
     void pipelineStepChanged(int step);
+    // 边界线变更：传递左右边界位置（同时带出宽度/半径信息）
+    void boundariesUpdated(float left, float right);
+    // 周期裁剪结果：裁剪前规范化多边形 + 裁剪后周期多边形
+    void periodicClipResultReady(
+        const QVector<Sketch2DView::OffsetResultPolygon>& before,
+        const QVector<Sketch2DView::OffsetResultPolygon>& after);
+
+public slots:
+    /// 刷新周期裁剪（用于边界线变更后重新裁剪）
+    void refreshPeriodicClip();
 
 private slots:
     void runFullPipeline();
@@ -47,6 +56,7 @@ private:
     void processCurveOffset(double distance);
     void processDeselfIntersection();
     void processPreserveGlobalSelfIntersection();
+    void processPeriodicClip();    // 周期裁剪步骤
 
     Sketch2DView* m_mainView = nullptr;
     Sketch2DView* m_topRightView = nullptr;

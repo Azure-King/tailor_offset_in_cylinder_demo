@@ -17,7 +17,11 @@
 
 #include "Sketch2DView.h"
 #include "FourViewContainer.h"
+#include "Cylinder3DView.h"
+#include "PeriodicClippingViews.h"
 #include "PolygonIO.h"
+
+#include <QTabWidget>
 
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
@@ -69,9 +73,71 @@ int main(int argc, char* argv[]) {
     viewContainer->setMinimumSize(800, 300);
 
     auto* view = viewContainer->mainView(); // 主视图用于工具选择
+    view->setCylinderRadius(100.0f);  // set boundary width to match cylinder circumference
+
+    // 右侧垂直分割器：上方分页视图 + 下方3D圆柱视图
+    auto* rightSplitter = new QSplitter(Qt::Vertical, mainSplitter);
+
+    // === 分页控件：切换流水线视图 / 周期裁剪视图 ===
+    auto* tabWidget = new QTabWidget(rightSplitter);
+    tabWidget->setTabPosition(QTabWidget::North);
+
+    // Tab 1: 流水线四视图
+    tabWidget->addTab(viewContainer, "流水线 (1-4)");
+
+    // Tab 2: 周期裁剪视图 (视图 6 & 7)
+    auto* periodicViews = new PeriodicClippingViews(tabWidget);
+    tabWidget->addTab(periodicViews, "周期裁剪 (6-7)");
+
+    rightSplitter->addWidget(tabWidget);
+
+    // 第五视图：3D 圆柱视图
+    auto* cylinder3DView = new Cylinder3DView(&window);
+    cylinder3DView->setMinimumSize(400, 200);
+    rightSplitter->addWidget(cylinder3DView);
+
+    // 连接：边界线变更 → 圆柱半径更新（从宽度反算半径 R = width / 2π）
+    QObject::connect(viewContainer, &FourViewContainer::boundariesUpdated,
+                     cylinder3DView, [cylinder3DView](float left, float right) {
+                         float radius = (right - left) / (2.0f * 3.14159265358979323846f);
+                         cylinder3DView->setCylinderRadius(radius);
+                     });
+
+    // 连接：周期裁剪结果 → 更新第6、7视图 + 贴到圆柱面
+    QObject::connect(viewContainer, &FourViewContainer::periodicClipResultReady,
+                     periodicViews, [periodicViews, cylinder3DView](
+                         const QVector<Sketch2DView::OffsetResultPolygon>& before,
+                         const QVector<Sketch2DView::OffsetResultPolygon>& after) {
+                         periodicViews->setBeforePolygons(before);
+                         periodicViews->setAfterPolygons(after);
+
+                         // 将 View 7 合并多边形贴到圆柱面上
+                         std::vector<Cylinder3DView::Polygon2D> mergedPolys;
+                         for (const auto& poly : after) {
+                             Cylinder3DView::Polygon2D mp;
+                             mp.color = poly.color;
+                             for (const auto& v : poly.vertices) {
+                                 Cylinder3DView::Vertex2D pv;
+                                 pv.point = v.point;
+                                 pv.bulge = v.bulge;
+                                 mp.vertices.push_back(pv);
+                             }
+                             mergedPolys.push_back(mp);
+                         }
+                         cylinder3DView->setMergedPolygons(mergedPolys);
+                     });
+
+    // 连接：边界线同步到周期裁剪视图的子视图
+    QObject::connect(viewContainer, &FourViewContainer::boundariesUpdated,
+                     periodicViews, [periodicViews](float left, float right) {
+                         periodicViews->setBoundaryLines(left, right);
+                     });
+
+    rightSplitter->setStretchFactor(0, 2);  // 四视图占更多空间
+    rightSplitter->setStretchFactor(1, 1);  // 3D视图
 
     mainSplitter->addWidget(leftSplitter);
-    mainSplitter->addWidget(viewContainer);
+    mainSplitter->addWidget(rightSplitter);
     mainSplitter->setStretchFactor(0, 0);
     mainSplitter->setStretchFactor(1, 1);
     mainSplitter->setSizes({ 300, 1000 });

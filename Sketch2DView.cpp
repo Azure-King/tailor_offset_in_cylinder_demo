@@ -24,6 +24,10 @@ Sketch2DView::Sketch2DView(QWidget* parent)
     setPalette(pal);
 
     setMinimumSize(400, 300);
+
+    // Initialize boundary lines to match cylinder circumference: 2πR
+    m_boundaryLeft = -static_cast<float>(M_PI) * m_cylinderRadius;
+    m_boundaryRight = static_cast<float>(M_PI) * m_cylinderRadius;
 }
 
 void Sketch2DView::setTool(Tool tool) {
@@ -52,6 +56,22 @@ void Sketch2DView::clear() {
     m_dragMode = DragMode::None;
     m_dragButton = Qt::NoButton;
     clearSelection();
+    update();
+}
+
+void Sketch2DView::setCylinderRadius(float r) {
+    m_cylinderRadius = r;
+    // Recenter boundaries to 2πR width around origin
+    float halfWidth = static_cast<float>(M_PI) * r;
+    m_boundaryLeft = -halfWidth;
+    m_boundaryRight = halfWidth;
+    update();
+}
+
+void Sketch2DView::setBoundaryLines(float left, float right) {
+    m_boundaryLeft = left;
+    m_boundaryRight = right;
+    m_cylinderRadius = (right - left) / (2.0f * static_cast<float>(M_PI));
     update();
 }
 
@@ -470,8 +490,29 @@ void Sketch2DView::mousePressEvent(QMouseEvent* event) {
         return;
     }
 
-    // In read-only mode, only allow panning (middle mouse) and zooming (wheel)
+    // In read-only mode, only allow boundary drag, panning (middle mouse) and zooming (wheel)
     if (m_readOnly) {
+        // Check if clicking near a boundary line in read-only mode
+        if (event->button() == Qt::LeftButton) {
+            float leftScreenX = static_cast<float>(width()) / 2.0f + (m_boundaryLeft - m_offset.x()) * m_scale;
+            float rightScreenX = static_cast<float>(width()) / 2.0f + (m_boundaryRight - m_offset.x()) * m_scale;
+
+            const float hitThreshold = 10.0f;
+            if (std::abs(screenPos.x() - leftScreenX) < hitThreshold) {
+                m_dragMode = DragMode::Boundary;
+                m_draggedBoundary = -1;
+                m_dragStartPos = screenPos;
+                setCursor(Qt::SplitHCursor);
+                return;
+            }
+            if (std::abs(screenPos.x() - rightScreenX) < hitThreshold) {
+                m_dragMode = DragMode::Boundary;
+                m_draggedBoundary = 1;
+                m_dragStartPos = screenPos;
+                setCursor(Qt::SplitHCursor);
+                return;
+            }
+        }
         QWidget::mousePressEvent(event);
         return;
     }
@@ -485,6 +526,28 @@ void Sketch2DView::mousePressEvent(QMouseEvent* event) {
     // Reset drag flag when pressing right button
     if (event->button() == Qt::RightButton) {
         m_hasDragged = false;
+    }
+
+    // Check for boundary line drag (left button, in edit mode)
+    if (event->button() == Qt::LeftButton) {
+        float leftScreenX = static_cast<float>(width()) / 2.0f + (m_boundaryLeft - m_offset.x()) * m_scale;
+        float rightScreenX = static_cast<float>(width()) / 2.0f + (m_boundaryRight - m_offset.x()) * m_scale;
+
+        const float hitThreshold = 10.0f;
+        if (std::abs(screenPos.x() - leftScreenX) < hitThreshold) {
+            m_dragMode = DragMode::Boundary;
+            m_draggedBoundary = -1;
+            m_dragStartPos = screenPos;
+            setCursor(Qt::SplitHCursor);
+            return;
+        }
+        if (std::abs(screenPos.x() - rightScreenX) < hitThreshold) {
+            m_dragMode = DragMode::Boundary;
+            m_draggedBoundary = 1;
+            m_dragStartPos = screenPos;
+            setCursor(Qt::SplitHCursor);
+            return;
+        }
     }
 
     // Polygon tool: check for vertex or edge midpoint interaction
@@ -536,6 +599,34 @@ void Sketch2DView::mouseMoveEvent(QMouseEvent* event) {
         QPointF delta = event->position() - m_panStart;
         m_offset -= QPointF(delta.x() / m_scale, -delta.y() / m_scale);
         m_panStart = event->position();
+        update();
+        QWidget::mouseMoveEvent(event);
+        return;
+    }
+
+    // Handle boundary line dragging
+    if (m_dragMode == DragMode::Boundary && (event->buttons() & Qt::LeftButton)) {
+        QPointF deltaScreen = screenPos - m_dragStartPos;
+        float deltaWorld = static_cast<float>(deltaScreen.x() / m_scale);
+        const float minWidth = 2.0f * static_cast<float>(M_PI);  // Minimum width = 2π
+
+        if (m_draggedBoundary == -1) {
+            // Dragging left boundary
+            m_boundaryLeft += deltaWorld;
+            // Enforce minimum distance: left <= right - minWidth
+            if (m_boundaryLeft > m_boundaryRight - minWidth) {
+                m_boundaryLeft = m_boundaryRight - minWidth;
+            }
+        } else if (m_draggedBoundary == 1) {
+            // Dragging right boundary
+            m_boundaryRight += deltaWorld;
+            // Enforce minimum distance: right >= left + minWidth
+            if (m_boundaryRight < m_boundaryLeft + minWidth) {
+                m_boundaryRight = m_boundaryLeft + minWidth;
+            }
+        }
+
+        m_dragStartPos = screenPos;
         update();
         QWidget::mouseMoveEvent(event);
         return;
@@ -657,6 +748,16 @@ void Sketch2DView::mouseMoveEvent(QMouseEvent* event) {
         }
     }
 
+    // 悬停在边界线上时切换光标
+    if (m_dragMode == DragMode::None) {
+        float leftScreenX = static_cast<float>(width()) / 2.0f + (m_boundaryLeft - m_offset.x()) * m_scale;
+        float rightScreenX = static_cast<float>(width()) / 2.0f + (m_boundaryRight - m_offset.x()) * m_scale;
+        const float hitThreshold = 10.0f;
+        bool nearBoundary = (std::abs(screenPos.x() - leftScreenX) < hitThreshold) ||
+                            (std::abs(screenPos.x() - rightScreenX) < hitThreshold);
+        setCursor(nearBoundary ? Qt::SplitHCursor : Qt::ArrowCursor);
+    }
+
     QWidget::mouseMoveEvent(event);
 }
 
@@ -675,6 +776,19 @@ void Sketch2DView::mouseReleaseEvent(QMouseEvent* event) {
     if (event->button() == Qt::MiddleButton && m_isPanning) {
         m_isPanning = false;
         setCursor(Qt::ArrowCursor);
+    }
+
+    // Handle boundary drag release
+    if (event->button() == Qt::LeftButton && m_dragMode == DragMode::Boundary) {
+        m_dragMode = DragMode::None;
+        m_draggedBoundary = 0;
+        setCursor(Qt::ArrowCursor);
+        // Update cylinder radius from boundary width, then emit actual boundary positions
+        float newWidth = m_boundaryRight - m_boundaryLeft;
+        m_cylinderRadius = newWidth / (2.0f * static_cast<float>(M_PI));
+        emit boundariesChanged(m_boundaryLeft, m_boundaryRight);
+        update();
+        return;
     }
 
     // Reset drag state on left or right button release
@@ -718,6 +832,33 @@ void Sketch2DView::paintEvent(QPaintEvent* event) {
     painter.setPen(QPen(QColor(80, 80, 80), 1));
     painter.drawLine(0, worldBounds.top(), 0, worldBounds.bottom());
     painter.drawLine(worldBounds.left(), 0, worldBounds.right(), 0);
+    painter.restore();
+
+    // === Cylinder boundary lines (unwrapped strip) ===
+    painter.save();
+    {
+        QPen boundaryPen(QColor(0, 180, 220), 1.5f / m_scale); // cyan dashed
+        boundaryPen.setStyle(Qt::DashLine);
+        painter.setPen(boundaryPen);
+        painter.setBrush(Qt::NoBrush);
+
+        // Left boundary
+        painter.drawLine(QPointF(m_boundaryLeft, worldBounds.top()),
+                         QPointF(m_boundaryLeft, worldBounds.bottom()));
+
+        // Right boundary
+        painter.drawLine(QPointF(m_boundaryRight, worldBounds.top()),
+                         QPointF(m_boundaryRight, worldBounds.bottom()));
+
+        // Semi-transparent tint between boundaries
+        QColor tint(0, 180, 220, 12);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(tint);
+        float bw = m_boundaryRight - m_boundaryLeft;
+        float bh = worldBounds.height();
+        painter.drawRect(QRectF(static_cast<qreal>(m_boundaryLeft), worldBounds.top(),
+                                static_cast<qreal>(bw), static_cast<qreal>(bh)));
+    }
     painter.restore();
 
     // Draw polylines
@@ -1281,7 +1422,7 @@ void Sketch2DView::paintEvent(QPaintEvent* event) {
     // Reset transform for HUD
     painter.resetTransform();
 
-    // HUD - 左下角显示缩放等级，右下角显示鼠标坐标
+    // HUD - 左下角显示缩放等级，右下角显示鼠标坐标和边界宽度
     painter.save();
     painter.setPen(QPen(QColor(200, 200, 200), 1));
     painter.setBrush(Qt::NoBrush);
@@ -1290,11 +1431,15 @@ void Sketch2DView::paintEvent(QPaintEvent* event) {
     // 左下角：缩放等级
     painter.drawText(10, height() - 10, QString("Scale: %1x").arg(m_scale, 0, 'f', 2));
 
-    // 右下角：鼠标坐标
+    // 右下角：边界宽度 + 鼠标坐标
     if (!m_mousePos.isNull()) {
         QPointF worldPos = screenToWorld(m_mousePos);
-        QString coordText = QString("X: %1  Y: %2").arg(worldPos.x(), 0, 'f', 2).arg(worldPos.y(), 0, 'f', 2);
-        QRectF textRect(0, height() - 20, width() - 10, 15);
+        float width = m_boundaryRight - m_boundaryLeft;
+        QString coordText = QString("Width: %1  |  X: %2  Y: %3")
+                                .arg(width, 0, 'f', 2)
+                                .arg(worldPos.x(), 0, 'f', 2)
+                                .arg(worldPos.y(), 0, 'f', 2);
+        QRectF textRect(0, height() - 20, width - 10, 15);
         painter.drawText(textRect, Qt::AlignRight | Qt::AlignBottom, coordText);
     }
     painter.restore();

@@ -32,7 +32,7 @@ if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" AND NOT MINGW)
 endif()
 
 # 查找 Qt6
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGLWidgets)
 
 qt_add_executable(TailorOffsetDemo
     main.cpp
@@ -40,11 +40,17 @@ qt_add_executable(TailorOffsetDemo
     Sketch2DView.cpp
     FourViewContainer.h
     FourViewContainer.cpp
+    Cylinder3DView.h
+    Cylinder3DView.cpp
     BooleanOperations.h
     BooleanOperations.cpp
     PolygonIO.h
     PolygonIO.cpp
     CurveOffset.h
+    PeriodicClipper.h
+    PeriodicClipper.cpp
+    PeriodicClippingViews.h
+    PeriodicClippingViews.cpp
 )
 
 # 添加第三方库路径
@@ -54,4 +60,4 @@ target_include_directories(TailorOffsetDemo PRIVATE
     "${THIRD_PARTY_DIR}/tailor/include"
 )
 
-target_link_libraries(TailorOffsetDemo PRIVATE Qt6::Widgets)
+target_link_libraries(TailorOffsetDemo PRIVATE Qt6::Widgets Qt6::OpenGLWidgets)
