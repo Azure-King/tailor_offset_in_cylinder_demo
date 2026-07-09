@@ -54,9 +54,9 @@ void Cylinder3DView::setCylinderHeight(float height) {
 
 void Cylinder3DView::computeArcYBounds(const Vertex2D& v0, const Vertex2D& v1,
                                        double& outYMin, double& outYMax) {
-    double ax = v0.point.x(), ay = v0.point.y();
-    double bx = v1.point.x(), by = v1.point.y();
-    double bulge = v1.bulge;  // bulge is stored on the start vertex
+    double ay = v0.point.y();
+    double by = v1.point.y();
+    double bulge = v0.bulge;  // bulge is stored on the start vertex (v0)
 
     outYMin = std::min(ay, by);
     outYMax = std::max(ay, by);
@@ -65,51 +65,38 @@ void Cylinder3DView::computeArcYBounds(const Vertex2D& v0, const Vertex2D& v1,
         return;  // straight line, endpoints are the bounds
     }
 
-    // Arc center and radius (from tailor's ArcSegmentTraits formulas)
+    // Arc center and radius — same formulas as tessellateArc
+    double ax = v0.point.x(), bx = v1.point.x();
     double b = 0.5 * (1.0 / bulge - bulge);
     double cx = 0.5 * (ax + bx - b * (by - ay));
     double cy = 0.5 * (ay + by + b * (bx - ax));
-    double dx = bx - ax, dy = by - ay;
-    double L = std::sqrt(dx * dx + dy * dy);
-    double R = std::abs(0.25 * L * (1.0 / bulge + bulge));
+    double Rc = std::sqrt((ax - cx) * (ax - cx) + (ay - cy) * (ay - cy));
 
-    // Start and end angles (from center)
+    // Start angle, sweep angle, and direction — same as tessellateArc
     double startAngle = std::atan2(ay - cy, ax - cx);
-    double endAngle   = std::atan2(by - cy, bx - cx);
-    double sweepAngle = 4.0 * std::atan(std::abs(bulge));  // always positive
+    double sweepAngle = 4.0 * std::atan(std::abs(bulge));
+    int dir = (bulge > 0.0) ? 1 : -1;
 
-    // Normalize to [0, 2π)
-    auto norm = [](double a) {
-        const double tau = 2.0 * M_PI;
-        a = std::fmod(a, tau);
-        if (a < 0.0) a += tau;
-        return a;
+    // Analytically check if the arc passes through the top (angle=π/2)
+    // or bottom (angle=-π/2) of the circle.
+    // Returns true if targetAngle lies on the arc from startAngle to
+    // startAngle + dir*sweepAngle (winding in direction dir).
+    auto angleOnArc = [&](double target) -> bool {
+        // Signed angular distance from startAngle to target following dir
+        double dist = dir * (target - startAngle);
+        // Normalize to [0, 2π)
+        dist = std::fmod(dist, 2.0 * M_PI);
+        if (dist < 0.0) dist += 2.0 * M_PI;
+        return dist <= sweepAngle + 1e-12;
     };
 
-    startAngle = norm(startAngle);
-    endAngle   = norm(endAngle);
-
-    // Check if arc passes through top (π/2) or bottom (3π/2) of the circle
-    auto angleInSweep = [&](double targetAngle) -> bool {
-        targetAngle = norm(targetAngle);
-        if (bulge > 0.0) {
-            // CCW sweep from startAngle
-            double diff = targetAngle - startAngle;
-            if (diff < 0.0) diff += 2.0 * M_PI;
-            return diff <= sweepAngle;
-        } else {
-            // CW sweep from startAngle
-            double diff = startAngle - targetAngle;
-            if (diff < 0.0) diff += 2.0 * M_PI;
-            return diff <= sweepAngle;
-        }
-    };
-
-    if (angleInSweep(M_PI / 2.0)) {
-        outYMax = std::max(outYMax, cy + R);
+    // Circle top: y = cy + Rc at angle π/2
+    if (angleOnArc(M_PI / 2.0)) {
+        outYMax = cy + Rc;
     }
-    if (angleInSweep(3.0 * M_PI / 2.0)) {
-        outYMin = std::min(outYMin, cy - R);
+    // Circle bottom: y = cy - Rc at angle -π/2 (equivalently 3π/2)
+    if (angleOnArc(-M_PI / 2.0)) {
+        outYMin = cy - Rc;
     }
 }
 
@@ -147,8 +134,8 @@ void Cylinder3DView::setMergedPolygons(
         return;
     }
 
-    // Step 2: 自动设置圆柱高度（10% margin）
-    double margin = (yMax - yMin) * 0.1;
+    // Step 2: 自动设置圆柱高度（20% margin）
+    double margin = (yMax - yMin) * 0.2;
     double newHeight = (yMax - yMin) + 2.0 * margin;
     m_polygonYOffset = static_cast<float>(-(yMin + yMax) / 2.0);
 
@@ -341,9 +328,10 @@ void Cylinder3DView::generateCylinderGeometry() {
     };
 
     // === Side surface (CCW winding viewed from outside) ===
+    // Start from theta=-π (seam, x=-R) so U=0 aligns with texture's x=-πR
     for (int i = 0; i < segs; ++i) {
-        float theta0 = 2.0f * static_cast<float>(M_PI) * i / segs;
-        float theta1 = 2.0f * static_cast<float>(M_PI) * (i + 1) / segs;
+        float theta0 = -static_cast<float>(M_PI) + 2.0f * static_cast<float>(M_PI) * i / segs;
+        float theta1 = -static_cast<float>(M_PI) + 2.0f * static_cast<float>(M_PI) * (i + 1) / segs;
 
         float cos0 = std::cos(theta0), sin0 = std::sin(theta0);
         float cos1 = std::cos(theta1), sin1 = std::sin(theta1);
@@ -367,8 +355,8 @@ void Cylinder3DView::generateCylinderGeometry() {
 
     // === Top cap (CCW, sits directly on side surface seam) ===
     for (int i = 0; i < segs; ++i) {
-        float theta0 = 2.0f * static_cast<float>(M_PI) * i / segs;
-        float theta1 = 2.0f * static_cast<float>(M_PI) * (i + 1) / segs;
+        float theta0 = -static_cast<float>(M_PI) + 2.0f * static_cast<float>(M_PI) * i / segs;
+        float theta1 = -static_cast<float>(M_PI) + 2.0f * static_cast<float>(M_PI) * (i + 1) / segs;
 
         addVertex(0.0f, halfH, 0.0f, 0.0f, 1.0f, 0.0f, 0.5f, 0.5f);
         addVertex(m_radius * std::cos(theta1), halfH, m_radius * std::sin(theta1), 0.0f, 1.0f, 0.0f, 0.5f, 0.5f);
@@ -377,8 +365,8 @@ void Cylinder3DView::generateCylinderGeometry() {
 
     // === Bottom cap (CCW) ===
     for (int i = 0; i < segs; ++i) {
-        float theta0 = 2.0f * static_cast<float>(M_PI) * i / segs;
-        float theta1 = 2.0f * static_cast<float>(M_PI) * (i + 1) / segs;
+        float theta0 = -static_cast<float>(M_PI) + 2.0f * static_cast<float>(M_PI) * i / segs;
+        float theta1 = -static_cast<float>(M_PI) + 2.0f * static_cast<float>(M_PI) * (i + 1) / segs;
 
         addVertex(0.0f, -halfH, 0.0f, 0.0f, -1.0f, 0.0f, 0.5f, 0.5f);
         addVertex(m_radius * std::cos(theta0), -halfH, m_radius * std::sin(theta0), 0.0f, -1.0f, 0.0f, 0.5f, 0.5f);
@@ -513,6 +501,21 @@ void Cylinder3DView::generatePolygonTexture() {
     float yOffset = m_polygonYOffset;
     int tess = m_arcTessellation;
 
+    // Step 0: 从多边形数据中提取实际 X 范围，计算居中偏移量。
+    // 周期裁剪后的多边形 X 范围 = [boundaryLeft, boundaryRight]，
+    // 而圆柱的 unwrapped X 范围总是 [-πR, πR] 中心在原点。
+    // 当边界不对称时两者中心不一致，需要将多边形居中。
+    double xDataMin =  std::numeric_limits<double>::max();
+    double xDataMax = -std::numeric_limits<double>::max();
+    for (const auto& poly : m_mergedPolygons) {
+        for (const auto& v : poly.vertices) {
+            double vx = v.point.x();
+            if (vx < xDataMin) xDataMin = vx;
+            if (vx > xDataMax) xDataMax = vx;
+        }
+    }
+    double xCenter = (xDataMin + xDataMax) * 0.5;
+
     // 圆柱带范围：X ∈ [-πR, πR]，Y ∈ [-halfH, halfH]
     double xMin = -M_PI * R;
     double xMax =  M_PI * R;
@@ -527,16 +530,18 @@ void Cylinder3DView::generatePolygonTexture() {
     texH = std::min(texH, 4096);
 
     // 世界坐标 → 纹理像素坐标
+    // 先居中多边形 X 坐标（使数据中心对齐圆柱中心），再进行水平翻转
     auto worldToPixel = [&](double x, double y) -> QPointF {
-        double u = (x - xMin) / (xMax - xMin);
+        double xc = x - xCenter;  // 居中
+        double u = 1.0 - (xc - xMin) / (xMax - xMin);
         double v = (y - yMin) / (yMax - yMin);
-        return QPointF(u * texW, (1.0 - v) * texH);
+        return QPointF(u * texW, v * texH);
     };
 
     // 弧段 tessellation
     auto tessellateArc = [&](const Vertex2D& v0, const Vertex2D& v1) -> std::vector<QPointF> {
         std::vector<QPointF> pts;
-        double bulge = v1.bulge;
+        double bulge = v0.bulge;  // v0 is the start vertex of edge v0→v1
         double ax = v0.point.x(), ay = v0.point.y();
         double bx = v1.point.x(), by = v1.point.y();
 
@@ -742,21 +747,59 @@ void Cylinder3DView::mousePressEvent(QMouseEvent* event) {
         m_lastMousePos = event->pos();
         setCursor(Qt::ClosedHandCursor);
         event->accept();
+    } else if (event->button() == Qt::MiddleButton) {
+        m_isPanning = true;
+        m_lastMousePos = event->pos();
+        setCursor(Qt::SizeAllCursor);
+        event->accept();
+    } else if (event->button() == Qt::RightButton) {
+        m_isZooming = true;
+        m_lastMousePos = event->pos();
+        setCursor(Qt::SizeVerCursor);
+        event->accept();
     } else {
         QOpenGLWidget::mousePressEvent(event);
     }
 }
 
 void Cylinder3DView::mouseMoveEvent(QMouseEvent* event) {
-    if (m_isDragging) {
-        QPoint delta = event->pos() - m_lastMousePos;
-        m_lastMousePos = event->pos();
+    QPoint delta = event->pos() - m_lastMousePos;
+    m_lastMousePos = event->pos();
 
-        m_rotationY += delta.x() * 0.5f;
-        m_rotationX += delta.y() * 0.5f;
+    if (m_isDragging) {
+        // 旋转：鼠标右拖 → 物体右侧转过来
+        // 鼠标上拖 → 物体顶部向你倾斜
+        m_rotationY -= delta.x() * 0.4f;
+        m_rotationX += delta.y() * 0.4f;
 
         // Clamp pitch to avoid flipping
         m_rotationX = std::clamp(m_rotationX, -89.0f, 89.0f);
+
+        update();
+        event->accept();
+    } else if (m_isPanning) {
+        // 中键平移：沿屏幕 XY 方向移动目标中心点
+        float rx = m_rotationX * static_cast<float>(M_PI) / 180.0f;
+        float ry = m_rotationY * static_cast<float>(M_PI) / 180.0f;
+
+        // 屏幕右方向在世界坐标中的近似方向
+        float viewCosY = std::cos(ry);
+        float viewSinY = std::sin(ry);
+
+        // 平移灵敏度随距离缩放
+        float panScale = m_distance * 0.001f;
+        m_targetCenter += QPointF(
+            viewCosY * delta.x() * panScale - viewSinY * delta.y() * panScale,
+            viewSinY * delta.x() * panScale + viewCosY * delta.y() * panScale
+        );
+
+        update();
+        event->accept();
+    } else if (m_isZooming) {
+        // 右键拖拽缩放：上拖放大，下拖缩小
+        float zoomFactor = 1.0f - delta.y() * 0.005f;
+        m_distance *= zoomFactor;
+        m_distance = std::clamp(m_distance, 50.0f, 3000.0f);
 
         update();
         event->accept();
@@ -766,8 +809,19 @@ void Cylinder3DView::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void Cylinder3DView::mouseReleaseEvent(QMouseEvent* event) {
+    bool handled = false;
     if (event->button() == Qt::LeftButton && m_isDragging) {
         m_isDragging = false;
+        handled = true;
+    } else if (event->button() == Qt::MiddleButton && m_isPanning) {
+        m_isPanning = false;
+        handled = true;
+    } else if (event->button() == Qt::RightButton && m_isZooming) {
+        m_isZooming = false;
+        handled = true;
+    }
+
+    if (handled) {
         setCursor(Qt::ArrowCursor);
         event->accept();
     } else {

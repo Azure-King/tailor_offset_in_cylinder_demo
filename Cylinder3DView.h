@@ -103,7 +103,9 @@ private:
 
     // Mouse interaction
     QPoint m_lastMousePos;
-    bool m_isDragging = false;
+    bool m_isDragging = false;      // Left button: rotate
+    bool m_isPanning = false;       // Middle button: pan
+    bool m_isZooming = false;       // Right button: zoom
 
     // Matrices
     QMatrix4x4 m_projection;

@@ -1,5 +1,9 @@
 #include "PeriodicClipper.h"
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 #include <cmath>
 #include <algorithm>
 #include <limits>
@@ -21,10 +25,54 @@ void PeriodicClipper::ComputeBounds(
         for (const auto& arc : poly) {
             auto p0 = arc.Point0();
             auto p1 = arc.Point1();
-            minX = std::min(minX, std::min(p0.x, p1.x));
-            maxX = std::max(maxX, std::max(p0.x, p1.x));
-            minY = std::min(minY, std::min(p0.y, p1.y));
-            maxY = std::max(maxY, std::max(p0.y, p1.y));
+            double ax = p0.x, ay = p0.y;
+            double bx = p1.x, by = p1.y;
+
+            // Endpoints always contribute
+            minX = std::min(minX, std::min(ax, bx));
+            maxX = std::max(maxX, std::max(ax, bx));
+            minY = std::min(minY, std::min(ay, by));
+            maxY = std::max(maxY, std::max(ay, by));
+
+            double bulge = arc.Bulge();
+            if (std::abs(bulge) < 1e-10) {
+                continue;  // straight line, endpoints are sufficient
+            }
+
+            // Arc center and radius (same formulas as Cylinder3DView)
+            double b = 0.5 * (1.0 / bulge - bulge);
+            double cx = 0.5 * (ax + bx - b * (by - ay));
+            double cy = 0.5 * (ay + by + b * (bx - ax));
+            double Rc = std::sqrt((ax - cx) * (ax - cx) + (ay - cy) * (ay - cy));
+
+            double startAngle = std::atan2(ay - cy, ax - cx);
+            double sweepAngle = 4.0 * std::atan(std::abs(bulge));
+            int dir = (bulge > 0.0) ? 1 : -1;
+
+            // Check if a target angle lies on the arc
+            auto onArc = [&](double target) -> bool {
+                double dist = dir * (target - startAngle);
+                dist = std::fmod(dist, 2.0 * M_PI);
+                if (dist < 0.0) dist += 2.0 * M_PI;
+                return dist <= sweepAngle + 1e-12;
+            };
+
+            // Circle top (π/2): maxY
+            if (onArc(M_PI / 2.0)) {
+                maxY = std::max(maxY, cy + Rc);
+            }
+            // Circle bottom (-π/2): minY
+            if (onArc(-M_PI / 2.0)) {
+                minY = std::min(minY, cy - Rc);
+            }
+            // Circle right (0 or 2π): maxX
+            if (onArc(0.0) || onArc(2.0 * M_PI)) {
+                maxX = std::max(maxX, cx + Rc);
+            }
+            // Circle left (π): minX
+            if (onArc(M_PI)) {
+                minX = std::min(minX, cx - Rc);
+            }
         }
     }
 }
@@ -94,8 +142,8 @@ std::vector<std::vector<PeriodicClipper::Arc>> PeriodicClipper::ClipToStrip(
     double minX, maxX, minY, maxY;
     ComputeBounds(inputPolygons, minX, maxX, minY, maxY);
 
-    // 对 Y 加一些 padding 确保裁剪矩形完全覆盖
-    double yPadding = std::max(1.0, (maxY - minY) * 0.1);
+    // 对 Y 加一些 padding 确保裁剪矩形完全覆盖，避免画面截断
+    double yPadding = std::max(2.0, (maxY - minY) * 0.2);
     double clipBottom = minY - yPadding;
     double clipTop = maxY + yPadding;
 
