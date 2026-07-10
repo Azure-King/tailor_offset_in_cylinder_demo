@@ -63,10 +63,16 @@ int main(int argc, char* argv[]) {
     offsetResultsItem->setText(0, "曲线偏置结果");
     offsetResultsItem->setExpanded(true);
 
-    // 设置左侧分割器的比例（输入在上，偏置结果在下）
+    // ==================== 区域结果模型树（第三部分） ====================
+    auto* regionResultTree = new QTreeWidget(leftSplitter);
+    regionResultTree->setHeaderLabel("区域结果");
+    regionResultTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
+
+    // 设置左侧分割器的比例（输入在上，偏置结果在中间，区域结果在下）
     leftSplitter->setStretchFactor(0, 1);  // 输入模型树
     leftSplitter->setStretchFactor(1, 1);  // 偏置结果模型树
-    leftSplitter->setSizes({ 200, 200 });
+    leftSplitter->setStretchFactor(2, 1);  // 区域结果模型树
+    leftSplitter->setSizes({ 150, 150, 150 });
 
     // 使用 FourViewContainer 替代单个 Sketch2DView
     auto* viewContainer = new FourViewContainer(&window);
@@ -103,19 +109,28 @@ int main(int argc, char* argv[]) {
                          cylinder3DView->setCylinderRadius(radius);
                      });
 
-    // 连接：周期裁剪结果 → 更新第6、7视图 + 贴到圆柱面
+    // 连接：周期裁剪结果 → 更新第6、7视图
     QObject::connect(viewContainer, &FourViewContainer::periodicClipResultReady,
-                     periodicViews, [periodicViews, cylinder3DView](
+                     periodicViews, [periodicViews](
                          const QVector<Sketch2DView::OffsetResultPolygon>& before,
                          const QVector<Sketch2DView::OffsetResultPolygon>& after) {
                          periodicViews->setBeforePolygons(before);
                          periodicViews->setAfterPolygons(after);
+                     });
 
-                         // 将 View 7 合并多边形贴到圆柱面上
+    // 连接：圆柱区域合并结果 → 展示到 View 8 + 贴到3D圆柱面
+    QObject::connect(viewContainer, &FourViewContainer::periodicCylindricalResultReady,
+                     periodicViews, [periodicViews, cylinder3DView](
+                         const QVector<Sketch2DView::OffsetResultPolygon>& cylindrical) {
+                         // View 8 展示圆柱区域着色多边形
+                         periodicViews->setMergedPolygons(cylindrical);
+
+                         // 同时将多边形贴到 3D 圆柱面
                          std::vector<Cylinder3DView::Polygon2D> mergedPolys;
-                         for (const auto& poly : after) {
+                         for (const auto& poly : cylindrical) {
                              Cylinder3DView::Polygon2D mp;
                              mp.color = poly.color;
+                             mp.isOpen = poly.isOpen;
                              for (const auto& v : poly.vertices) {
                                  Cylinder3DView::Vertex2D pv;
                                  pv.point = v.point;
@@ -131,6 +146,35 @@ int main(int argc, char* argv[]) {
     QObject::connect(viewContainer, &FourViewContainer::boundariesUpdated,
                      periodicViews, [periodicViews](float left, float right) {
                          periodicViews->setBoundaryLines(left, right);
+                     });
+
+    // 连接：区域树更新 → 刷新左侧区域结果模型树
+    QObject::connect(viewContainer, &FourViewContainer::regionTreeUpdated,
+                     [viewContainer, regionResultTree]() {
+                         viewContainer->buildRegionTree(regionResultTree);
+                     });
+
+    // 连接：区域结果树选中 → 高亮 View 7 对应多边形边
+    QObject::connect(regionResultTree, &QTreeWidget::itemSelectionChanged,
+                     [regionResultTree, periodicViews]() {
+                         QSet<int> indices;
+                         QList<QTreeWidgetItem*> stack;
+                         for (auto* item : regionResultTree->selectedItems()) {
+                             stack.append(item);
+                             while (!stack.isEmpty()) {
+                                 auto* current = stack.takeLast();
+                                 if (current->childCount() == 0) {
+                                     bool ok;
+                                     int idx = current->data(0, Qt::UserRole).toInt(&ok);
+                                     if (ok) indices.insert(idx);
+                                 } else {
+                                     for (int i = 0; i < current->childCount(); ++i) {
+                                         stack.append(current->child(i));
+                                     }
+                                 }
+                             }
+                         }
+                         periodicViews->mergedView()->setHighlightedFillResultIndices(indices);
                      });
 
     rightSplitter->setStretchFactor(0, 2);  // 四视图占更多空间

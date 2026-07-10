@@ -8,9 +8,11 @@
 #include <QCheckBox>
 #include <QPushButton>
 #include <QSlider>
+#include <QTreeWidget>
 #include <QHash>
 #include <vector>
 #include "BooleanOperations.h"
+#include "CylindricalRegion.h"
 #include "Sketch2DView.h"
 
 class FourViewContainer : public QWidget {
@@ -31,6 +33,14 @@ public:
     // Synchronize view state from main view to all views
     void synchronizeViews();
 
+    /// 用圆柱区域树填充 QTreeWidget
+    void buildRegionTree(QTreeWidget* tree) const;
+
+    /// 获取圆柱区域树（只读）
+    const std::vector<tailor_visualization::CylindricalArea>& cylindricalAreaTree() const {
+        return m_cylindricalAreaTree;
+    }
+
 signals:
     // 预留信号：曲线偏置操作触发
     void offsetOperationTriggered(double distance);
@@ -41,6 +51,11 @@ signals:
     void periodicClipResultReady(
         const QVector<Sketch2DView::OffsetResultPolygon>& before,
         const QVector<Sketch2DView::OffsetResultPolygon>& after);
+    // 圆柱区域合并结果（View 8 + 3D圆柱贴面）
+    void periodicCylindricalResultReady(
+        const QVector<Sketch2DView::OffsetResultPolygon>& cylindrical);
+    // 区域树已构建（用于左侧面板刷新区域结果树）
+    void regionTreeUpdated();
 
 public slots:
     /// 刷新周期裁剪（用于边界线变更后重新裁剪）
@@ -83,4 +98,7 @@ private:
     QPushButton* m_preserveGlobalBtn = nullptr;
 
     QGridLayout* m_layout = nullptr;
+
+    // 圆柱区域树（周期裁剪步骤构建，供左侧模型树展示）
+    std::vector<tailor_visualization::CylindricalArea> m_cylindricalAreaTree;
 };

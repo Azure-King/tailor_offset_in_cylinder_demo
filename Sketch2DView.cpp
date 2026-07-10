@@ -1128,30 +1128,103 @@ void Sketch2DView::paintEvent(QPaintEvent* event) {
             QColor penColor = poly.isHole ? QColor(baseColor.red(), baseColor.green(), baseColor.blue(), 200)
                                          : baseColor;
 
-            QPainterPath fillPath;
-            fillPath.moveTo(poly.vertices[0].point);
-            for (int j = 0; j < poly.vertices.size(); ++j) {
+            if (poly.isOpen) {
+                // 开放路径（不可缩环/条带边界）：逐边描边，不填充，不闭合
+                painter.setPen(QPen(penColor, 3 / m_scale));
+                painter.setBrush(Qt::NoBrush);
+
+                for (int j = 0; j < poly.vertices.size() - 1; ++j) {
+                    const auto& v1 = poly.vertices[j];
+                    const auto& v2 = poly.vertices[j + 1];
+
+                    QPainterPath edgePath;
+                    edgePath.moveTo(v1.point);
+                    if (qAbs(v1.bulge) < 1e-6) {
+                        edgePath.lineTo(v2.point);
+                    } else {
+                        ArcSegment arc = arcSegmentFromBulge(v1.point, v2.point, v1.bulge);
+                        const QRectF rect(arc.center.x() - arc.radius, arc.center.y() - arc.radius,
+                            arc.radius * 2.0, arc.radius * 2.0);
+                        edgePath.arcTo(rect, arc.startAngleDeg, arc.spanAngleDeg);
+                    }
+                    painter.drawPath(edgePath);
+                }
+            } else {
+                // 闭合路径（可缩环）：正常填充 + 描边
+                QPainterPath fillPath;
+                fillPath.moveTo(poly.vertices[0].point);
+                for (int j = 0; j < poly.vertices.size(); ++j) {
+                    int next = (j + 1) % poly.vertices.size();
+                    const auto& v1 = poly.vertices[j];
+                    const auto& v2 = poly.vertices[next];
+                    if (qAbs(v1.bulge) < 1e-6) {
+                        fillPath.lineTo(v2.point);
+                    } else {
+                        ArcSegment arc = arcSegmentFromBulge(v1.point, v2.point, v1.bulge);
+                        const QRectF rect(arc.center.x() - arc.radius, arc.center.y() - arc.radius,
+                            arc.radius * 2.0, arc.radius * 2.0);
+                        fillPath.arcTo(rect, arc.startAngleDeg, arc.spanAngleDeg);
+                    }
+                }
+                fillPath.closeSubpath();
+
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(fillColor);
+                painter.drawPath(fillPath);
+
+                painter.setPen(QPen(penColor, 2 / m_scale));
+                painter.setBrush(Qt::NoBrush);
+                painter.drawPath(fillPath);
+            }
+        }
+        painter.restore();
+    }
+
+    // 绘制高亮的 fillResult 边（用于区域结果树的选中反馈，只描边不填充）
+    if (!m_highlightedFillResultIndices.isEmpty() && !m_fillResults.isEmpty()) {
+        painter.save();
+        for (int pi = 0; pi < m_fillResults.size(); ++pi) {
+            if (!m_highlightedFillResultIndices.contains(pi)) continue;
+            const auto& poly = m_fillResults[pi];
+            if (poly.vertices.isEmpty()) continue;
+
+            // 为每条边单独绘制，不填充，不闭合（避免开放路径出现跨条带的直线）
+            int edgeCount = poly.isOpen
+                ? poly.vertices.size() - 1          // 开放路径：v0→v1, v1→v2, ... v(N-1)→vN
+                : poly.vertices.size();              // 闭合环：v0→v1, ..., vN→v0
+
+            for (int j = 0; j < edgeCount; ++j) {
                 int next = (j + 1) % poly.vertices.size();
                 const auto& v1 = poly.vertices[j];
                 const auto& v2 = poly.vertices[next];
+
+                QPainterPath edgePath;
+                edgePath.moveTo(v1.point);
                 if (qAbs(v1.bulge) < 1e-6) {
-                    fillPath.lineTo(v2.point);
+                    edgePath.lineTo(v2.point);
                 } else {
                     ArcSegment arc = arcSegmentFromBulge(v1.point, v2.point, v1.bulge);
                     const QRectF rect(arc.center.x() - arc.radius, arc.center.y() - arc.radius,
                         arc.radius * 2.0, arc.radius * 2.0);
-                    fillPath.arcTo(rect, arc.startAngleDeg, arc.spanAngleDeg);
+                    edgePath.arcTo(rect, arc.startAngleDeg, arc.spanAngleDeg);
                 }
+
+                // 外圈光晕
+                QPen glowPen(QColor(255, 230, 50, 80), 8 / m_scale);
+                glowPen.setJoinStyle(Qt::RoundJoin);
+                glowPen.setCapStyle(Qt::RoundCap);
+                painter.setPen(glowPen);
+                painter.setBrush(Qt::NoBrush);
+                painter.drawPath(edgePath);
+
+                // 高亮边框：亮黄色，粗线
+                QPen hlPen(QColor(255, 230, 50), 4 / m_scale);
+                hlPen.setJoinStyle(Qt::RoundJoin);
+                hlPen.setCapStyle(Qt::RoundCap);
+                painter.setPen(hlPen);
+                painter.setBrush(Qt::NoBrush);
+                painter.drawPath(edgePath);
             }
-            fillPath.closeSubpath();
-
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(fillColor);
-            painter.drawPath(fillPath);
-
-            painter.setPen(QPen(penColor, 2 / m_scale));
-            painter.setBrush(Qt::NoBrush);
-            painter.drawPath(fillPath);
         }
         painter.restore();
     }
@@ -1824,6 +1897,16 @@ void Sketch2DView::setHighlightedSourceSegmentIds(const QSet<int>& segmentIds) {
 
 void Sketch2DView::clearHighlightedSourceSegmentIds() {
     m_highlightedSourceSegmentIds.clear();
+    update();
+}
+
+void Sketch2DView::setHighlightedFillResultIndices(const QSet<int>& indices) {
+    m_highlightedFillResultIndices = indices;
+    update();
+}
+
+void Sketch2DView::clearHighlightedFillResultIndices() {
+    m_highlightedFillResultIndices.clear();
     update();
 }
 

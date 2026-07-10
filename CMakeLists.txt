@@ -51,6 +51,8 @@ qt_add_executable(TailorOffsetDemo
     PeriodicClipper.cpp
     PeriodicClippingViews.h
     PeriodicClippingViews.cpp
+    CylindricalRegion.h
+    CylindricalRegion.cpp
 )
 
 # 添加第三方库路径

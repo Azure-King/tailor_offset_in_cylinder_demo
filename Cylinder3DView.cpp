@@ -581,6 +581,10 @@ void Cylinder3DView::generatePolygonTexture() {
         int n = static_cast<int>(poly.vertices.size());
         if (n < 2) continue;
 
+        // 开放路径（条带边界描边线）不参与填充纹理生成，
+        // 只有闭合多边形才需要渲染到圆柱面上
+        if (poly.isOpen) continue;
+
         QColor fillColor = poly.color.isValid() ? poly.color : QColor(200, 200, 200);
         fillColor.setAlpha(220);
 
@@ -588,7 +592,8 @@ void Cylinder3DView::generatePolygonTexture() {
         bool firstPoint = true;
         for (int i = 0; i < n; ++i) {
             const auto& v0 = poly.vertices[i];
-            const auto& v1 = poly.vertices[(i + 1) % n];
+            int next = (i + 1) % n;
+            const auto& v1 = poly.vertices[next];
 
             // 把世界坐标 (x, y) 映射到纹理坐标：使用 y + yOffset 来匹配圆柱上的位置
             double wy0 = v0.point.y() + yOffset;

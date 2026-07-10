@@ -14,14 +14,17 @@ PeriodicClippingViews::PeriodicClippingViews(QWidget* parent)
 
 void PeriodicClippingViews::setupViews()
 {
-    auto* mainLayout = new QHBoxLayout(this);
+    auto* mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
 
-    m_splitter = new QSplitter(Qt::Horizontal, this);
+    m_vertSplitter = new QSplitter(Qt::Vertical, this);
 
-    // === 左侧：View 6 — 周期裁剪各分量 ===
-    auto* leftFrame = new QFrame(m_splitter);
+    // === 上半部分：水平分割器 (View 6 | View 7) ===
+    m_horizSplitter = new QSplitter(Qt::Horizontal, m_vertSplitter);
+
+    // === View 6 — 周期裁剪各分量 ===
+    auto* leftFrame = new QFrame(m_horizSplitter);
     leftFrame->setFrameStyle(QFrame::Box | QFrame::Plain);
     auto* leftLayout = new QVBoxLayout(leftFrame);
     leftLayout->setContentsMargins(0, 0, 0, 0);
@@ -36,27 +39,47 @@ void PeriodicClippingViews::setupViews()
     m_beforeView->setReadOnly(true);
     leftLayout->addWidget(m_beforeView);
 
-    // === 右侧：View 7 — 周期裁剪分量求并集 ===
-    auto* rightFrame = new QFrame(m_splitter);
-    rightFrame->setFrameStyle(QFrame::Box | QFrame::Plain);
-    auto* rightLayout = new QVBoxLayout(rightFrame);
-    rightLayout->setContentsMargins(0, 0, 0, 0);
-    rightLayout->setSpacing(0);
+    // === View 7 — 周期裁剪并集（简单布尔并集） ===
+    auto* middleFrame = new QFrame(m_horizSplitter);
+    middleFrame->setFrameStyle(QFrame::Box | QFrame::Plain);
+    auto* middleLayout = new QVBoxLayout(middleFrame);
+    middleLayout->setContentsMargins(0, 0, 0, 0);
+    middleLayout->setSpacing(0);
 
-    auto* rightLabel = new QLabel("7. 周期并集 (融合结果)", rightFrame);
-    rightLabel->setAlignment(Qt::AlignCenter);
-    rightLabel->setStyleSheet("QLabel { background: #333; color: #ccc; font-size: 11px; padding: 2px; }");
-    rightLayout->addWidget(rightLabel);
+    auto* middleLabel = new QLabel("7. 周期并集 (简单并集)", middleFrame);
+    middleLabel->setAlignment(Qt::AlignCenter);
+    middleLabel->setStyleSheet("QLabel { background: #333; color: #ccc; font-size: 11px; padding: 2px; }");
+    middleLayout->addWidget(middleLabel);
 
-    m_afterView = new Sketch2DView(rightFrame);
+    m_afterView = new Sketch2DView(middleFrame);
     m_afterView->setReadOnly(true);
-    rightLayout->addWidget(m_afterView);
+    middleLayout->addWidget(m_afterView);
 
-    m_splitter->addWidget(leftFrame);
-    m_splitter->addWidget(rightFrame);
-    m_splitter->setSizes({500, 500});
+    m_horizSplitter->addWidget(leftFrame);
+    m_horizSplitter->addWidget(middleFrame);
+    m_horizSplitter->setSizes({500, 500});
 
-    mainLayout->addWidget(m_splitter);
+    // === View 8 — 圆柱区域合并结果 ===
+    auto* bottomFrame = new QFrame(m_vertSplitter);
+    bottomFrame->setFrameStyle(QFrame::Box | QFrame::Plain);
+    auto* bottomLayout = new QVBoxLayout(bottomFrame);
+    bottomLayout->setContentsMargins(0, 0, 0, 0);
+    bottomLayout->setSpacing(0);
+
+    auto* bottomLabel = new QLabel("8. 圆柱区域 (合并结果)", bottomFrame);
+    bottomLabel->setAlignment(Qt::AlignCenter);
+    bottomLabel->setStyleSheet("QLabel { background: #333; color: #ccc; font-size: 11px; padding: 2px; }");
+    bottomLayout->addWidget(bottomLabel);
+
+    m_mergedView = new Sketch2DView(bottomFrame);
+    m_mergedView->setReadOnly(true);
+    bottomLayout->addWidget(m_mergedView);
+
+    m_vertSplitter->addWidget(m_horizSplitter);
+    m_vertSplitter->addWidget(bottomFrame);
+    m_vertSplitter->setSizes({300, 300});
+
+    mainLayout->addWidget(m_vertSplitter);
 }
 
 void PeriodicClippingViews::setBeforePolygons(
@@ -81,6 +104,17 @@ void PeriodicClippingViews::setAfterPolygons(
     m_afterView->setFillResults(polygons);
 }
 
+void PeriodicClippingViews::setMergedPolygons(
+    const QVector<Sketch2DView::OffsetResultPolygon>& polygons)
+{
+    // 使用 fillResults 方式显示
+    m_mergedView->clearFillResults();
+    m_mergedView->clearSelfIntersectionResults();
+    m_mergedView->clearOffsetResults();
+    m_mergedView->clearDeselfIntersectionResults();
+    m_mergedView->setFillResults(polygons);
+}
+
 void PeriodicClippingViews::clear()
 {
     m_beforeView->clearFillResults();
@@ -94,10 +128,17 @@ void PeriodicClippingViews::clear()
     m_afterView->clearOffsetResults();
     m_afterView->clearDeselfIntersectionResults();
     m_afterView->update();
+
+    m_mergedView->clearFillResults();
+    m_mergedView->clearSelfIntersectionResults();
+    m_mergedView->clearOffsetResults();
+    m_mergedView->clearDeselfIntersectionResults();
+    m_mergedView->update();
 }
 
 void PeriodicClippingViews::setBoundaryLines(float left, float right)
 {
     m_beforeView->setBoundaryLines(left, right);
     m_afterView->setBoundaryLines(left, right);
+    m_mergedView->setBoundaryLines(left, right);
 }

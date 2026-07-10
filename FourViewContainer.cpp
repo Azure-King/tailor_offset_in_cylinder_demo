@@ -3,6 +3,9 @@
 #include "BooleanOperations.h"
 #include "CurveOffset.h"
 #include "PeriodicClipper.h"
+#include "CylindricalRegion.h"
+
+#include <functional>
 
 // debug
 #include "third_party/tailor/test/polygon_io.h"
@@ -1246,26 +1249,286 @@ void FourViewContainer::processPeriodicClip() {
 		clippedResults.append(arcsToPolygon(clippedArcs[i], color));
 	}
 
-	// --- View 7: 所有裁剪分量求并集 ---
-	QVector<Sketch2DView::OffsetResultPolygon> mergedResults;
-	if (!clippedArcs.empty()) {
-		tailor_visualization::BooleanOperations boolOp;
-		for (const auto& arcs : clippedArcs) {
-			boolOp.AddSubjectPolygon(arcs);
-		}
-		auto mergedArcs = boolOp.ExecuteOnlySubjectPattern(
-			static_cast<const tailor_visualization::IFillType*>(nullptr));
+    // --- View 7: 所有裁剪分量求并集（简单布尔并集） ---
+    QVector<Sketch2DView::OffsetResultPolygon> mergedResults;
+    QVector<Sketch2DView::OffsetResultPolygon> cylindricalResults;
+    if (!clippedArcs.empty()) {
+        tailor_visualization::BooleanOperations boolOp;
+        for (const auto& arcs : clippedArcs) {
+            boolOp.AddSubjectPolygon(arcs);
+        }
+        auto mergedArcs = boolOp.ExecuteOnlySubjectPattern(
+            static_cast<const tailor_visualization::IFillType*>(nullptr));
 
-		for (size_t i = 0; i < mergedArcs.size(); ++i) {
-			QColor color = s_colorPalette[(i + clippedArcs.size()) % s_colorPalette.size()];
-			mergedResults.append(arcsToPolygon(mergedArcs[i], color));
-		}
-	}
+        // --- View 7: 简单布尔并集结果（按圆柱区域着色） ---
+        for (size_t i = 0; i < mergedArcs.size(); ++i) {
+            QColor color = s_colorPalette[i % s_colorPalette.size()];
+            mergedResults.append(arcsToPolygon(mergedArcs[i], color));
+        }
 
-	emit periodicClipResultReady(clippedResults, mergedResults);
+        // --- 构建圆柱区域树 + 按区域着色展平多边形 ---
+        m_cylindricalAreaTree = tailor_visualization::BuildCylindricalAreas(
+            mergedArcs, bLeft, bRight);
+
+        // 调试输出
+        if (m_consoleTimeCheck->isChecked()) {
+            int bandCount = 0, contCount = 0;
+            for (const auto& area : m_cylindricalAreaTree) {
+                if (area.isBand()) ++bandCount;
+                else if (area.isContractibleArea()) ++contCount;
+            }
+            std::cout << "[CylindricalRegion] Built area tree: "
+                      << bandCount << " bands, " << contCount
+                      << " contractible, " << m_cylindricalAreaTree.size()
+                      << " total top-level areas" << std::endl;
+        }
+
+        // 展平为 View 7 用的多边形，按区域分配颜色（同一区域的所有环共享颜色）
+        // 同时构建 areaIndex → (color, loop count) 映射供树控件和高亮使用
+        static const std::vector<QColor> kAreaColors = {
+            QColor(255, 100, 100),   // 红色
+            QColor(100, 200, 100),   // 绿色
+            QColor(100, 100, 255),   // 蓝色
+            QColor(255, 200, 100),   // 橙色
+            QColor(200, 100, 255),   // 紫色
+            QColor(100, 255, 200),   // 青色
+            QColor(255, 150, 100),   // 橙红
+            QColor(150, 100, 255),   // 紫蓝
+        };
+
+        int areaColorIdx = 0;
+
+        std::function<void(const std::vector<tailor_visualization::CylindricalArea>&,
+                           int, QColor)> buildAreaPolys;
+
+        buildAreaPolys = [&](const std::vector<tailor_visualization::CylindricalArea>& areas,
+                              int depth, QColor parentColor) {
+            for (const auto& area : areas) {
+                // 顶层区域分配独立颜色，嵌套子区域继承父区域颜色
+                QColor areaColor = parentColor.isValid()
+                    ? parentColor
+                    : kAreaColors[areaColorIdx++ % kAreaColors.size()];
+
+                if (area.isBand() && area.boundary.size() == 2) {
+                    // =========================================================
+                    // 条带区域：构建一个闭合的填充多边形
+                    // 路径序列：上边界(right→left) → 左clip线 → 下边界(left→right) → 右clip线(闭合)
+                    // =========================================================
+                    const auto& upper = area.boundary[0];  // right→left
+                    const auto& lower = area.boundary[1];  // left→right
+
+                    if (!upper.arcs.empty() && !lower.arcs.empty()) {
+                        // 1) 先创建闭合填充多边形（isOpen=false, 有填充）
+                        Sketch2DView::OffsetResultPolygon fillPoly;
+                        fillPoly.color = areaColor;
+                        fillPoly.isHole = (depth % 2 == 1);
+                        fillPoly.isOpen = false;
+
+                        auto addVertex = [&](const tailor_visualization::ArcPoint& pt, double bulge,
+                                             int segId, int srcEdgeId, int tag,
+                                             double cvxX, double cvxY) {
+                            Sketch2DView::PolygonVertex v;
+                            v.point = QPointF(pt.x, pt.y);
+                            v.bulge = bulge;
+                            fillPoly.vertices.append(v);
+                            fillPoly.edgeSegmentIds.append(segId);
+                            fillPoly.edgeSourceEdgeIds.append(srcEdgeId);
+                            fillPoly.edgeTags.append(tag);
+                            fillPoly.edgeConvexJoinVertices.append(
+                                tag == 1 ? QPointF(cvxX, cvxY) : QPointF());
+                        };
+
+                        // 上边界 (right→left)
+                        for (const auto& arc : upper.arcs) {
+                            addVertex(arc.Point0(), arc.Bulge(),
+                                      arc.Data().segmentId, arc.Data().sourceEdgeId,
+                                      arc.Data().edgeTag,
+                                      arc.Data().convexJoinVertexX,
+                                      arc.Data().convexJoinVertexY);
+                        }
+                        // 上边界终点（左边界）+ 左clip线 (直边, bulge=0)
+                        {
+                            const auto& lastArc = upper.arcs.back();
+                            addVertex(lastArc.Point1(), 0.0, 0, 0, 0, 0, 0);
+                        }
+
+                        // 下边界 (left→right)
+                        for (const auto& arc : lower.arcs) {
+                            addVertex(arc.Point0(), arc.Bulge(),
+                                      arc.Data().segmentId, arc.Data().sourceEdgeId,
+                                      arc.Data().edgeTag,
+                                      arc.Data().convexJoinVertexX,
+                                      arc.Data().convexJoinVertexY);
+                        }
+                        // 下边界终点（右边界）+ 右clip线 (直边, bulge=0, 连回上边界起点)
+                        {
+                            const auto& lastArc = lower.arcs.back();
+                            addVertex(lastArc.Point1(), 0.0, 0, 0, 0, 0, 0);
+                        }
+
+                        cylindricalResults.append(std::move(fillPoly));
+                    }
+
+                    // 2) 边界线：上边界描边（isOpen=true, 仅描边不填充）
+                    for (const auto& loop : area.boundary) {
+                        Sketch2DView::OffsetResultPolygon edgePoly;
+                        edgePoly.color = areaColor.darker(120);
+                        edgePoly.isHole = (depth % 2 == 1);
+                        edgePoly.isOpen = true;
+
+                        for (const auto& arc : loop.arcs) {
+                            Sketch2DView::PolygonVertex vertex;
+                            vertex.point = QPointF(arc.Point0().x, arc.Point0().y);
+                            vertex.bulge = arc.Bulge();
+                            edgePoly.vertices.append(vertex);
+                            edgePoly.edgeSegmentIds.append(arc.Data().segmentId);
+                            edgePoly.edgeSourceEdgeIds.append(arc.Data().sourceEdgeId);
+                            edgePoly.edgeTags.append(arc.Data().edgeTag);
+                            edgePoly.edgeConvexJoinVertices.append(
+                                arc.Data().edgeTag == 1
+                                ? QPointF(arc.Data().convexJoinVertexX, arc.Data().convexJoinVertexY)
+                                : QPointF());
+                        }
+                        if (!loop.arcs.empty()) {
+                            const auto& lastArc = loop.arcs.back();
+                            Sketch2DView::PolygonVertex endVertex;
+                            endVertex.point = QPointF(lastArc.Point1().x, lastArc.Point1().y);
+                            endVertex.bulge = 0.0;
+                            edgePoly.vertices.append(endVertex);
+                            edgePoly.edgeSegmentIds.append(0);
+                            edgePoly.edgeSourceEdgeIds.append(0);
+                            edgePoly.edgeTags.append(0);
+                            edgePoly.edgeConvexJoinVertices.append(QPointF());
+                        }
+                        cylindricalResults.append(std::move(edgePoly));
+                    }
+                } else {
+                    // =========================================================
+                    // 可缩区域：单个闭合环，正常填充+描边
+                    // =========================================================
+                    for (const auto& loop : area.boundary) {
+                        Sketch2DView::OffsetResultPolygon poly;
+                        poly.color = areaColor;
+                        poly.isHole = (depth % 2 == 1);
+                        poly.isOpen = !loop.isContractible;
+
+                        for (const auto& arc : loop.arcs) {
+                            Sketch2DView::PolygonVertex vertex;
+                            vertex.point = QPointF(arc.Point0().x, arc.Point0().y);
+                            vertex.bulge = arc.Bulge();
+                            poly.vertices.append(vertex);
+                            poly.edgeSegmentIds.append(arc.Data().segmentId);
+                            poly.edgeSourceEdgeIds.append(arc.Data().sourceEdgeId);
+                            poly.edgeTags.append(arc.Data().edgeTag);
+                            poly.edgeConvexJoinVertices.append(
+                                arc.Data().edgeTag == 1
+                                ? QPointF(arc.Data().convexJoinVertexX, arc.Data().convexJoinVertexY)
+                                : QPointF());
+                        }
+                        if (!loop.arcs.empty()) {
+                            const auto& lastArc = loop.arcs.back();
+                            Sketch2DView::PolygonVertex endVertex;
+                            endVertex.point = QPointF(lastArc.Point1().x, lastArc.Point1().y);
+                            endVertex.bulge = 0.0;
+                            poly.vertices.append(endVertex);
+                            poly.edgeSegmentIds.append(0);
+                            poly.edgeSourceEdgeIds.append(0);
+                            poly.edgeTags.append(0);
+                            poly.edgeConvexJoinVertices.append(QPointF());
+                        }
+                        cylindricalResults.append(std::move(poly));
+                    }
+                }
+
+                // 子区域继承相同颜色
+                buildAreaPolys(area.children, depth + 1, areaColor);
+            }
+        };
+
+        buildAreaPolys(m_cylindricalAreaTree, 0, QColor());
+    }
+
+    emit periodicClipResultReady(clippedResults, mergedResults);
+    emit periodicCylindricalResultReady(cylindricalResults);
+    emit regionTreeUpdated();
 }
 
 void FourViewContainer::refreshPeriodicClip() {
 	// 边界线变更后重新裁剪（复用已缓存的规范化多边形 m_mergedFillArcs）
 	processPeriodicClip();
+}
+
+void FourViewContainer::buildRegionTree(QTreeWidget* tree) const {
+    tree->clear();
+    tree->setSelectionMode(QAbstractItemView::ExtendedSelection);
+
+    if (m_cylindricalAreaTree.empty()) {
+        auto* placeholder = new QTreeWidgetItem(tree);
+        placeholder->setText(0, "(无区域结果 — 请先绘制多边形并运行流水线)");
+        placeholder->setForeground(0, QColor(128, 128, 128));
+        return;
+    }
+
+    // flatIndex 必须与 buildAreaPolys 中添加到 cylindricalResults 的顺序一致：
+    //   Band: fillPoly, edgePoly[0], edgePoly[1]  → flatIndex += 3
+    //   Contractible: poly  → flatIndex += 1
+    int flatIndex = 0;
+
+    std::function<void(QTreeWidgetItem*, const std::vector<tailor_visualization::CylindricalArea>&, int)>
+        traverseAndBuild;
+
+    traverseAndBuild = [&](QTreeWidgetItem* parent,
+                            const std::vector<tailor_visualization::CylindricalArea>& areas,
+                            int depth) {
+        for (size_t ai = 0; ai < areas.size(); ++ai) {
+            const auto& area = areas[ai];
+
+            // 区域节点
+            QString areaType = area.isBand() ? "条带" : "可缩";
+            QString inout = (depth % 2 == 0) ? "外层" : "孔洞";
+            QString areaLabel = QString("区域%1 [%2, %3]")
+                .arg(ai + 1).arg(areaType).arg(inout);
+            // parent==nullptr → 顶层区域，直接加到 tree
+            auto* areaItem = parent
+                ? new QTreeWidgetItem(parent)
+                : new QTreeWidgetItem(tree);
+            areaItem->setText(0, areaLabel);
+
+            if (area.isBand() && area.boundary.size() == 2) {
+                // Band: 填充区域 + 上边界 + 下边界
+                auto* fillItem = new QTreeWidgetItem(areaItem);
+                fillItem->setText(0, "填充区域");
+                fillItem->setData(0, Qt::UserRole, flatIndex++);
+
+                const auto& upper = area.boundary[0];
+                QString upperDir = upper.leftToRight ? "左→右" : "右→左";
+                auto* upperItem = new QTreeWidgetItem(areaItem);
+                upperItem->setText(0, QString("上边界 (%1)").arg(upperDir));
+                upperItem->setData(0, Qt::UserRole, flatIndex++);
+
+                const auto& lower = area.boundary[1];
+                QString lowerDir = lower.leftToRight ? "左→右" : "右→左";
+                auto* lowerItem = new QTreeWidgetItem(areaItem);
+                lowerItem->setText(0, QString("下边界 (%1)").arg(lowerDir));
+                lowerItem->setData(0, Qt::UserRole, flatIndex++);
+            } else {
+                // Contractible: 单个边界
+                for (size_t li = 0; li < area.boundary.size(); ++li) {
+                    const auto& loop = area.boundary[li];
+                    QString loopType = loop.isContractible ? "可缩环" : "不可缩环";
+                    QString loopLabel = QString("边界%1 [%2]").arg(li + 1).arg(loopType);
+                    auto* loopItem = new QTreeWidgetItem(areaItem);
+                    loopItem->setText(0, loopLabel);
+                    loopItem->setData(0, Qt::UserRole, flatIndex++);
+                }
+            }
+
+            // 递归子区域
+            traverseAndBuild(areaItem, area.children, depth + 1);
+        }
+    };
+
+    // 顶层区域直接添加到 tree
+    traverseAndBuild(nullptr, m_cylindricalAreaTree, 0);
+    tree->expandAll();
 }

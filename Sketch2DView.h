@@ -76,6 +76,7 @@ public:
         QVector<PolygonVertex> vertices;
         QColor color;
         bool isHole = false;
+        bool isOpen = false;               // true = 非闭合路径（不可缩环，左→右或右→左），绘制时不应 wrap 到最后一条边
         QVector<int> edgeSegmentIds;       // 每条边的 segmentId（当前阶段的合并标记），用于高亮溯源
         QVector<int> edgeSourceEdgeIds;    // 每条边的 sourceEdgeId（原始输入边索引，关系链根节点，永不变化）
         QVector<int> edgeTags;             // 每条边的类型标签：0=OffsetEdge, 1=JoinConvex, 2=JoinConcave
@@ -107,7 +108,11 @@ public:
     // 填充结果管理（第二视图用，不同多边形不同颜色）
     void setFillResults(const QVector<OffsetResultPolygon>& results);
     const QVector<OffsetResultPolygon>& fillResults() const { return m_fillResults; }
-    void clearFillResults() { m_fillResults.clear(); update(); }
+    void clearFillResults() { m_fillResults.clear(); m_highlightedFillResultIndices.clear(); update(); }
+
+    // 高亮指定的 fillResult 多边形（按索引）
+    void setHighlightedFillResultIndices(const QSet<int>& indices);
+    void clearHighlightedFillResultIndices();
 
     // Cylinder boundary lines (unwrapped width)
     void setCylinderRadius(float r);
@@ -214,6 +219,7 @@ private:
     QVector<OffsetResultPolygon> m_deselfIntersectionResults;
     // 填充结果（第二视图用）
     QVector<OffsetResultPolygon> m_fillResults;
+    QSet<int> m_highlightedFillResultIndices;  // 被高亮的 fillResult 多边形索引
 
     // Dragging state
     enum class DragMode {

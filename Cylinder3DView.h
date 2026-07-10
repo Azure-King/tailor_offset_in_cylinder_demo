@@ -28,6 +28,7 @@ public:
     struct Polygon2D {
         std::vector<Vertex2D> vertices;
         QColor color;
+        bool isOpen = false;
     };
 
     explicit Cylinder3DView(QWidget* parent = nullptr);
