@@ -101,4 +101,14 @@ private:
 
     // 圆柱区域树（周期裁剪步骤构建，供左侧模型树展示）
     std::vector<tailor_visualization::CylindricalArea> m_cylindricalAreaTree;
+
+    // 区域 → cylindricalResults 高亮索引映射（树控件选中时高亮对应的渲染项）
+    // key = 区域对象的地址（m_cylindricalAreaTree 中的稳定地址）
+    std::map<const tailor_visualization::CylindricalArea*, QVector<int>> m_areaHighlightIndices;
+
+    // 每个区域的每个 loop 产生的边索引数量（与 boundary loop 顺序对应）
+    std::map<const tailor_visualization::CylindricalArea*, std::vector<int>> m_areaLoopEdgeCounts;
+
+    // cylindricalResults 中填充多边形的数量（前面 N 项是填充，后续是边缘描边）
+    int m_cylindricalResultFillCount = 0;
 };

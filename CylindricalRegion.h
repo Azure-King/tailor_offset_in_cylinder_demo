@@ -120,8 +120,9 @@ struct CylindricalLoop {
 class CylindricalArea {
 public:
     /// 边界环
-    /// - Contractible: size() == 1, boundary[0].isContractible == true
-    /// - Band:         size() == 2, boundary[0/1].isContractible == false
+    /// - Contractible: 所有 loop 的 isContractible == true
+    /// - Band:         所有 loop 的 isContractible == false，
+    ///                 包含 upper (leftToRight=false) 和 lower (leftToRight=true)
     std::vector<CylindricalLoop> boundary;
 
     /// 子区域（孔洞或嵌套外环）
@@ -130,21 +131,28 @@ public:
     // ---- 类型判断 ----
 
     bool isBand() const {
-        return boundary.size() == 2
-            && !boundary[0].isContractible
-            && !boundary[1].isContractible;
+        if (boundary.empty()) return false;
+        bool hasUpper = false, hasLower = false;
+        for (const auto& l : boundary) {
+            if (l.isContractible) return false;
+            if (!l.leftToRight) hasUpper = true;
+            else                hasLower = true;
+        }
+        return hasUpper && hasLower;
     }
 
     bool isContractibleArea() const {
-        return boundary.size() == 1
-            && boundary[0].isContractible;
+        if (boundary.empty()) return false;
+        for (const auto& l : boundary)
+            if (!l.isContractible) return false;
+        return true;
     }
 
     bool isValid() const {
         if (boundary.empty()) return false;
-        if (isContractibleArea()) return boundary[0].isValid();
-        if (isBand()) return boundary[0].isValid() && boundary[1].isValid();
-        return false;
+        for (const auto& l : boundary)
+            if (!l.isValid()) return false;
+        return isContractibleArea() || isBand();
     }
 
     // ---- 空间查询 ----

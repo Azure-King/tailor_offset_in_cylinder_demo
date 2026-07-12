@@ -72,6 +72,15 @@ static double signedArea(const std::vector<Arc>& arcs) {
     return area * 0.5;
 }
 
+/// 计算 contractible area 的总面积（所有边界 loop 面积之和）
+static double contractibleAreaSize(const CylindricalArea& area) {
+    double total = 0.0;
+    for (const auto& loop : area.boundary) {
+        total += std::abs(signedArea(loop.arcs));
+    }
+    return total;
+}
+
 // ============================================================================
 // CylindricalArea 成员函数实现
 // ============================================================================
@@ -364,7 +373,7 @@ static int computeWinding(const std::vector<CurveGroup*>& loop,
                           double right, double eps) {
     int winding = 0;
     for (auto* g : loop) {
-        if (g->startPos.side == 2) {  // 起点在右边界
+        if (g->startPos.side == 1 || g->startPos.side == 2) {  // 起点在圆柱边界上
             if (g->startIsUpper)
                 winding += 1;
             else
@@ -377,18 +386,23 @@ static int computeWinding(const std::vector<CurveGroup*>& loop,
 /// 从曲线组构成的环创建 CylindricalArea
 /// @param winding 环绕数: 0=可缩, +1=上band, -1=下band
 static CylindricalArea buildAreaFromLoop(std::vector<CurveGroup>& loop,
-                                          int winding) {
+                                          int winding,
+                                          double left, double right, double eps) {
     CylindricalArea area;
 
     if (winding == 0) {
-        // 可缩区域：拼接所有曲线组
-        CylindricalLoop contractLoop;
-        contractLoop.isContractible = true;
+        // 可缩区域：每个 CurveGroup 单独作为一个 loop
+        // 过滤掉左右边界上的竖线弧段（母线处融合，不应显示）
         for (auto& g : loop) {
-            for (auto& arc : g.arcs)
-                contractLoop.arcs.push_back(std::move(arc));
+            CylindricalLoop contractLoop;
+            contractLoop.isContractible = true;
+            for (auto& arc : g.arcs) {
+                if (!isPurelyBoundaryEdge(arc, left, right, eps))
+                    contractLoop.arcs.push_back(std::move(arc));
+            }
+            if (!contractLoop.arcs.empty())
+                area.boundary.push_back(std::move(contractLoop));
         }
-        area.boundary.push_back(std::move(contractLoop));
     } else {
         // Band区域：分离上下边界
         std::vector<Arc> upperArcs, lowerArcs;
@@ -512,8 +526,8 @@ std::vector<CylindricalArea> BuildCylindricalAreas(
         std::vector<CylindricalArea> result;
         std::sort(contractibleAreas.begin(), contractibleAreas.end(),
             [](const CylindricalArea& a, const CylindricalArea& b) {
-                double aArea = std::abs(signedArea(a.boundary[0].arcs));
-                double bArea = std::abs(signedArea(b.boundary[0].arcs));
+                double aArea = contractibleAreaSize(a);
+                double bArea = contractibleAreaSize(b);
                 return aArea > bArea;
             });
         std::vector<bool> assigned(contractibleAreas.size(), false);
@@ -587,9 +601,16 @@ std::vector<CylindricalArea> BuildCylindricalAreas(
     }
 
     // ====================================================================
-    // Step 3: 沿连接图遍历形成环
+    // Step 3: 沿连接图遍历形成环，分离可缩环和不可缩环
+    //   - 可缩环 (winding==0): 直接构建 contractible area
+    //   - 不可缩环 (winding!=0): 暂存，计算每个环的最大 Y 值，后续配对
     // ====================================================================
-    std::vector<CylindricalArea> bandAreas;
+    struct NonContractLoop {
+        std::vector<CurveGroup> groups;
+        int winding;   // +1=上边界, -1=下边界
+        double maxY;   // 该环上所有顶点的最大 Y 值（圆柱母线方向）
+    };
+    std::vector<NonContractLoop> ncLoops;
 
     for (size_t i = 0; i < allGroups.size(); ++i) {
         if (allGroups[i].used) continue;
@@ -607,35 +628,94 @@ std::vector<CylindricalArea> BuildCylindricalAreas(
 
         if (loopPtrs.empty()) continue;
 
-        // Step 4: 用环绕数判定环类型
+        // 用环绕数判定环类型: 0=可缩, +1=上不可缩, -1=下不可缩
         int winding = computeWinding(loopPtrs, boundaryRight, eps);
 
-        // 收集曲线组数据构建 area
-        std::vector<CurveGroup> loopCopy;
-        loopCopy.reserve(loopPtrs.size());
-        for (auto* gp : loopPtrs) {
-            loopCopy.push_back(std::move(*gp));
-        }
+        if (winding == 0) {
+            // 可缩环 → 直接构建 contractible area
+            std::vector<CurveGroup> loopCopy;
+            loopCopy.reserve(loopPtrs.size());
+            for (auto* gp : loopPtrs)
+                loopCopy.push_back(std::move(*gp));
+            contractibleAreas.push_back(buildAreaFromLoop(loopCopy, 0,
+                boundaryLeft, boundaryRight, eps));
+        } else {
+            // 不可缩环 → 暂存，后续按 Y 值配对
+            NonContractLoop ncl;
+            ncl.winding = winding;
+            ncl.groups.reserve(loopPtrs.size());
+            for (auto* gp : loopPtrs)
+                ncl.groups.push_back(std::move(*gp));
 
-        CylindricalArea area = buildAreaFromLoop(loopCopy, winding);
-
-        if (area.isBand()) {
-            // 检查该 band 是否包含之前标记为 contractible 的环
-            // 把同源 contractible area 分到 band 内部
-            for (size_t ci = 0; ci < contractibleAreas.size(); ++ci) {
-                if (!contractibleAreas[ci].isContractibleArea()) continue;
-                if (contractibleInsideBand(contractibleAreas[ci], area,
-                                           boundaryLeft, boundaryRight, eps)) {
-                    area.children.push_back(
-                        std::move(contractibleAreas[ci]));
-                    contractibleAreas[ci].boundary.clear(); // 标记已分配
+            // 计算该不可缩环上所有顶点的最大 Y 值（圆柱母线方向）
+            ncl.maxY = -std::numeric_limits<double>::max();
+            for (const auto& g : ncl.groups) {
+                for (const auto& arc : g.arcs) {
+                    ncl.maxY = std::max(ncl.maxY, arc.Point0().y);
+                    ncl.maxY = std::max(ncl.maxY, arc.Point1().y);
                 }
             }
-
-            bandAreas.push_back(std::move(area));
-        } else if (area.isContractibleArea()) {
-            contractibleAreas.push_back(std::move(area));
+            ncLoops.push_back(std::move(ncl));
         }
+    }
+
+    // ====================================================================
+    // Step 4: 按最大 Y 值降序排列不可缩环，相邻配对形成条带区域
+    //   排序后索引 [0,1] 为第1个band, [2,3] 为第2个band, ...
+    //   每对中: 高Y环=上边界(right→left), 低Y环=下边界(left→right)
+    // ====================================================================
+    std::sort(ncLoops.begin(), ncLoops.end(),
+        [](const NonContractLoop& a, const NonContractLoop& b) {
+            return a.maxY > b.maxY;  // 降序：高Y在前
+        });
+
+    std::vector<CylindricalArea> bandAreas;
+
+    for (size_t i = 0; i + 1 < ncLoops.size(); i += 2) {
+        auto& upperNc = ncLoops[i];      // 较高 Y → 上边界
+        auto& lowerNc = ncLoops[i + 1];  // 较低 Y → 下边界
+
+        CylindricalArea area;
+
+        // 上边界 (right→left, leftToRight=false)，每个 CurveGroup 单独为一个 loop
+        // 过滤掉左右边界上的竖线弧段
+        for (auto& g : upperNc.groups) {
+            CylindricalLoop loop;
+            loop.isContractible = false;
+            loop.leftToRight = false;
+            for (auto& arc : g.arcs) {
+                if (!isPurelyBoundaryEdge(arc, boundaryLeft, boundaryRight, eps))
+                    loop.arcs.push_back(std::move(arc));
+            }
+            if (!loop.arcs.empty())
+                area.boundary.push_back(std::move(loop));
+        }
+
+        // 下边界 (left→right, leftToRight=true)，每个 CurveGroup 单独为一个 loop
+        // 过滤掉左右边界上的竖线弧段
+        for (auto& g : lowerNc.groups) {
+            CylindricalLoop loop;
+            loop.isContractible = false;
+            loop.leftToRight = true;
+            for (auto& arc : g.arcs) {
+                if (!isPurelyBoundaryEdge(arc, boundaryLeft, boundaryRight, eps))
+                    loop.arcs.push_back(std::move(arc));
+            }
+            if (!loop.arcs.empty())
+                area.boundary.push_back(std::move(loop));
+        }
+
+        // 检查该 band 是否包含 contractible area，将其嵌套为子区域
+        for (size_t ci = 0; ci < contractibleAreas.size(); ++ci) {
+            if (!contractibleAreas[ci].isContractibleArea()) continue;
+            if (contractibleInsideBand(contractibleAreas[ci], area,
+                                       boundaryLeft, boundaryRight, eps)) {
+                area.children.push_back(std::move(contractibleAreas[ci]));
+                contractibleAreas[ci].boundary.clear(); // 标记已分配
+            }
+        }
+
+        bandAreas.push_back(std::move(area));
     }
 
     // 清理已被分配到 band 内的 contractible areas
@@ -659,8 +739,8 @@ std::vector<CylindricalArea> BuildCylindricalAreas(
     if (result.size() > 1) {
         std::sort(result.begin(), result.end(),
             [](const CylindricalArea& a, const CylindricalArea& b) {
-                double aArea = std::abs(signedArea(a.boundary[0].arcs));
-                double bArea = std::abs(signedArea(b.boundary[0].arcs));
+                double aArea = contractibleAreaSize(a);
+                double bArea = contractibleAreaSize(b);
                 return aArea > bArea;
             });
 
@@ -692,8 +772,8 @@ std::vector<CylindricalArea> BuildCylindricalAreas(
         if (ba.children.size() > 1) {
             std::sort(ba.children.begin(), ba.children.end(),
                 [](const CylindricalArea& a, const CylindricalArea& b) {
-                    double aArea = std::abs(signedArea(a.boundary[0].arcs));
-                    double bArea = std::abs(signedArea(b.boundary[0].arcs));
+                    double aArea = contractibleAreaSize(a);
+                    double bArea = contractibleAreaSize(b);
                     return aArea > bArea;
                 });
 

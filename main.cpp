@@ -4,6 +4,7 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
+#include <QVector>
 
 #include <QAction>
 #include <QToolBar>
@@ -154,24 +155,14 @@ int main(int argc, char* argv[]) {
                          viewContainer->buildRegionTree(regionResultTree);
                      });
 
-    // 连接：区域结果树选中 → 高亮 View 7 对应多边形边
+    // 连接：区域结果树选中 → 高亮 View 8 对应多边形和边缘
     QObject::connect(regionResultTree, &QTreeWidget::itemSelectionChanged,
                      [regionResultTree, periodicViews]() {
                          QSet<int> indices;
-                         QList<QTreeWidgetItem*> stack;
                          for (auto* item : regionResultTree->selectedItems()) {
-                             stack.append(item);
-                             while (!stack.isEmpty()) {
-                                 auto* current = stack.takeLast();
-                                 if (current->childCount() == 0) {
-                                     bool ok;
-                                     int idx = current->data(0, Qt::UserRole).toInt(&ok);
-                                     if (ok) indices.insert(idx);
-                                 } else {
-                                     for (int i = 0; i < current->childCount(); ++i) {
-                                         stack.append(current->child(i));
-                                     }
-                                 }
+                             QVector<int> idxList = item->data(0, Qt::UserRole).value<QVector<int>>();
+                             for (int idx : idxList) {
+                                 if (idx >= 0) indices.insert(idx);
                              }
                          }
                          periodicViews->mergedView()->setHighlightedFillResultIndices(indices);
