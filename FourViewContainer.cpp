@@ -1495,103 +1495,83 @@ void FourViewContainer::buildRegionTree(QTreeWidget* tree) const {
 
     const int fillCount = m_cylindricalResultFillCount;
 
-    std::function<void(QTreeWidgetItem*, const std::vector<tailor_visualization::CylindricalArea>&, int)>
-        traverseAndBuild;
+    // 直接遍历 BuildCylindricalAreas 返回的顶层区域（不递归子区域），
+    // 每个顶层区域对应一个树控件节点
+    for (size_t ai = 0; ai < m_cylindricalAreaTree.size(); ++ai) {
+        const auto& area = m_cylindricalAreaTree[ai];
 
-    traverseAndBuild = [&](QTreeWidgetItem* parent,
-                            const std::vector<tailor_visualization::CylindricalArea>& areas,
-                            int depth) {
-        for (size_t ai = 0; ai < areas.size(); ++ai) {
-            const auto& area = areas[ai];
+        auto it = m_areaHighlightIndices.find(&area);
+        QVector<int> allIndices;
+        if (it != m_areaHighlightIndices.end()) allIndices = it->second;
 
-            // 查找该区域的高亮索引
-            auto it = m_areaHighlightIndices.find(&area);
-            QVector<int> allIndices;
-            if (it != m_areaHighlightIndices.end()) allIndices = it->second;
-
-            // 分离填充索引和边缘索引
-            QVector<int> fillIndices, edgeIndices;
-            for (int idx : allIndices) {
-                if (idx < fillCount) fillIndices.append(idx);
-                else                 edgeIndices.append(idx);
-            }
-
-            // 区域节点
-            QString areaType = area.isBand() ? "条带" : "可缩";
-            QString inout = (depth % 2 == 0) ? "外层" : "孔洞";
-            QString areaLabel = QString("区域%1 [%2, %3]")
-                .arg(ai + 1).arg(areaType).arg(inout);
-            auto* areaItem = parent
-                ? new QTreeWidgetItem(parent)
-                : new QTreeWidgetItem(tree);
-            areaItem->setText(0, areaLabel);
-            areaItem->setData(0, Qt::UserRole, QVariant::fromValue(allIndices));
-
-            if (area.isBand()) {
-                // Band: 填充区域 + 各条上边界 + 各条下边界
-                auto* fillItem = new QTreeWidgetItem(areaItem);
-                fillItem->setText(0, "填充区域");
-                fillItem->setData(0, Qt::UserRole, QVariant::fromValue(fillIndices));
-
-                // 读取每个 loop 的边索引数量
-                auto countsIt = m_areaLoopEdgeCounts.find(&area);
-                std::vector<int> loopCounts;
-                if (countsIt != m_areaLoopEdgeCounts.end()) loopCounts = countsIt->second;
-
-                int edgeOffset = 0;
-                int upperIdx = 0, lowerIdx = 0;
-                for (size_t li = 0; li < area.boundary.size(); ++li) {
-                    const auto& loop = area.boundary[li];
-                    int count = (li < loopCounts.size()) ? loopCounts[li] : 0;
-
-                    QString dirStr = loop.leftToRight ? "左→右" : "右→左";
-                    QString label;
-                    if (!loop.leftToRight) {
-                        label = QString("上边界%1 (%2)").arg(++upperIdx).arg(dirStr);
-                    } else {
-                        label = QString("下边界%1 (%2)").arg(++lowerIdx).arg(dirStr);
-                    }
-                    auto* loopItem = new QTreeWidgetItem(areaItem);
-                    loopItem->setText(0, label);
-
-                    // 边界项只高亮该 loop 对应的边
-                    QVector<int> loopEdgeIndices;
-                    for (int e = 0; e < count && (edgeOffset + e) < (int)edgeIndices.size(); ++e)
-                        loopEdgeIndices.append(edgeIndices[edgeOffset + e]);
-                    loopItem->setData(0, Qt::UserRole, QVariant::fromValue(loopEdgeIndices));
-                    edgeOffset += count;
-                }
-            } else {
-                // Contractible: 每个 loop 只高亮其自身的边
-                auto countsIt = m_areaLoopEdgeCounts.find(&area);
-                std::vector<int> loopCounts;
-                if (countsIt != m_areaLoopEdgeCounts.end()) loopCounts = countsIt->second;
-
-                int edgeOffset = 0;
-                for (size_t li = 0; li < area.boundary.size(); ++li) {
-                    const auto& loop = area.boundary[li];
-                    int count = (li < loopCounts.size()) ? loopCounts[li] : 0;
-
-                    QString loopType = loop.isContractible ? "可缩环" : "不可缩环";
-                    QString loopLabel = QString("边界%1 [%2]").arg(li + 1).arg(loopType);
-                    auto* loopItem = new QTreeWidgetItem(areaItem);
-                    loopItem->setText(0, loopLabel);
-
-                    // 边界项只高亮该 loop 对应的边
-                    QVector<int> loopEdgeIndices;
-                    for (int e = 0; e < count && (edgeOffset + e) < (int)edgeIndices.size(); ++e)
-                        loopEdgeIndices.append(edgeIndices[edgeOffset + e]);
-                    loopItem->setData(0, Qt::UserRole, QVariant::fromValue(loopEdgeIndices));
-                    edgeOffset += count;
-                }
-            }
-
-            // 递归子区域
-            traverseAndBuild(areaItem, area.children, depth + 1);
+        QVector<int> fillIndices, edgeIndices;
+        for (int idx : allIndices) {
+            if (idx < fillCount) fillIndices.append(idx);
+            else                 edgeIndices.append(idx);
         }
-    };
 
-    // 顶层区域直接添加到 tree
-    traverseAndBuild(nullptr, m_cylindricalAreaTree, 0);
+        // 区域节点
+        QString areaType = area.isBand() ? "条带" : "可缩";
+        QString areaLabel = QString("区域%1 [%2]")
+            .arg(ai + 1).arg(areaType);
+        auto* areaItem = new QTreeWidgetItem(tree);
+        areaItem->setText(0, areaLabel);
+        areaItem->setData(0, Qt::UserRole, QVariant::fromValue(allIndices));
+
+        // 填充区域子项
+        auto* fillItem = new QTreeWidgetItem(areaItem);
+        fillItem->setText(0, "填充区域");
+        fillItem->setData(0, Qt::UserRole, QVariant::fromValue(fillIndices));
+
+        // 每个 loop 的边索引数量
+        auto countsIt = m_areaLoopEdgeCounts.find(&area);
+        std::vector<int> loopCounts;
+        if (countsIt != m_areaLoopEdgeCounts.end()) loopCounts = countsIt->second;
+
+        if (area.isBand()) {
+            // 条带区域: 上/下边界成对
+            int edgeOffset = 0;
+            int upperIdx = 0, lowerIdx = 0;
+            for (size_t li = 0; li < area.boundary.size(); ++li) {
+                const auto& loop = area.boundary[li];
+                int count = (li < loopCounts.size()) ? loopCounts[li] : 0;
+
+                QString dirStr = loop.leftToRight ? "左→右" : "右→左";
+                QString label;
+                if (!loop.leftToRight) {
+                    label = QString("上边界%1 (%2)").arg(++upperIdx).arg(dirStr);
+                } else {
+                    label = QString("下边界%1 (%2)").arg(++lowerIdx).arg(dirStr);
+                }
+                auto* loopItem = new QTreeWidgetItem(areaItem);
+                loopItem->setText(0, label);
+
+                QVector<int> loopEdgeIndices;
+                for (int e = 0; e < count && (edgeOffset + e) < (int)edgeIndices.size(); ++e)
+                    loopEdgeIndices.append(edgeIndices[edgeOffset + e]);
+                loopItem->setData(0, Qt::UserRole, QVariant::fromValue(loopEdgeIndices));
+                edgeOffset += count;
+            }
+        } else {
+            // 可缩区域: 每个边界环作为一个子项
+            int edgeOffset = 0;
+            for (size_t li = 0; li < area.boundary.size(); ++li) {
+                const auto& loop = area.boundary[li];
+                int count = (li < loopCounts.size()) ? loopCounts[li] : 0;
+
+                QString loopType = loop.isContractible ? "可缩环" : "不可缩环";
+                QString loopLabel = QString("边界%1 [%2]").arg(li + 1).arg(loopType);
+                auto* loopItem = new QTreeWidgetItem(areaItem);
+                loopItem->setText(0, loopLabel);
+
+                QVector<int> loopEdgeIndices;
+                for (int e = 0; e < count && (edgeOffset + e) < (int)edgeIndices.size(); ++e)
+                    loopEdgeIndices.append(edgeIndices[edgeOffset + e]);
+                loopItem->setData(0, Qt::UserRole, QVariant::fromValue(loopEdgeIndices));
+                edgeOffset += count;
+            }
+        }
+    }
+
     tree->expandAll();
 }
