@@ -1257,18 +1257,18 @@ void FourViewContainer::processPeriodicClip() {
         for (const auto& arcs : clippedArcs) {
             boolOp.AddSubjectPolygon(arcs);
         }
-        auto mergedArcs = boolOp.ExecuteOnlySubjectPattern(
+        auto mergedAnnotated = boolOp.ExecuteOnlySubjectPatternAnnotated(
             static_cast<const tailor_visualization::IFillType*>(nullptr));
 
         // --- View 7: 简单布尔并集结果（按圆柱区域着色） ---
-        for (size_t i = 0; i < mergedArcs.size(); ++i) {
+        for (size_t i = 0; i < mergedAnnotated.size(); ++i) {
             QColor color = s_colorPalette[i % s_colorPalette.size()];
-            mergedResults.append(arcsToPolygon(mergedArcs[i], color));
+            mergedResults.append(arcsToPolygon(mergedAnnotated[i].arcs, color));
         }
 
         // --- 构建圆柱区域树 + 按区域着色展平多边形 ---
         m_cylindricalAreaTree = tailor_visualization::BuildCylindricalAreas(
-            mergedArcs, bLeft, bRight);
+            mergedAnnotated, bLeft, bRight);
 
         // 调试输出
         if (m_consoleTimeCheck->isChecked()) {
@@ -1296,7 +1296,34 @@ void FourViewContainer::processPeriodicClip() {
             QColor(150, 100, 255),   // 紫蓝
         };
 
+        // ---- 辅助函数：收集区域的 sourceEdgeId 指纹 ----
+        // 同源区域（被母线裁开后）应共享同一颜色
+        auto collectFp = [](const tailor_visualization::CylindricalArea& area) -> std::set<int> {
+            std::set<int> ids;
+            std::function<void(const tailor_visualization::CylindricalArea&)> go;
+            go = [&](const tailor_visualization::CylindricalArea& a) {
+                for (const auto& loop : a.boundary) {
+                    for (const auto& arc : loop.arcs) {
+                        ids.insert(arc.Data().sourceEdgeId);
+                    }
+                }
+                for (const auto& child : a.children) {
+                    go(child);
+                }
+            };
+            go(area);
+            return ids;
+        };
+
+        // 按 sourceEdgeId 指纹为顶层区域预分配颜色（同源同色）
         int areaColorIdx = 0;
+        std::map<std::set<int>, QColor> fpColorMap;
+        for (const auto& area : m_cylindricalAreaTree) {
+            auto fp = collectFp(area);
+            if (fpColorMap.find(fp) == fpColorMap.end()) {
+                fpColorMap[fp] = kAreaColors[areaColorIdx++ % kAreaColors.size()];
+            }
+        }
 
         std::function<void(const std::vector<tailor_visualization::CylindricalArea>&,
                            int, QColor)> buildAreaPolys;
@@ -1304,10 +1331,10 @@ void FourViewContainer::processPeriodicClip() {
         buildAreaPolys = [&](const std::vector<tailor_visualization::CylindricalArea>& areas,
                               int depth, QColor parentColor) {
             for (const auto& area : areas) {
-                // 顶层区域分配独立颜色，嵌套子区域继承父区域颜色
+                // 顶层区域按 sourceEdgeId 指纹分配颜色（同源同色），嵌套子区域继承父颜色
                 QColor areaColor = parentColor.isValid()
                     ? parentColor
-                    : kAreaColors[areaColorIdx++ % kAreaColors.size()];
+                    : fpColorMap[collectFp(area)];
 
                 if (area.isBand() && area.boundary.size() == 2) {
                     // =========================================================

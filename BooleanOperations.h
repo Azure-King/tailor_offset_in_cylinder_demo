@@ -248,6 +248,16 @@ namespace tailor_visualization {
         bool isHole = false;        // 是否为内环（洞）
     };
 
+    /**
+     * @brief 带 BoundaryType 标注和 PolyTree 层级信息的多边形
+     * 用于 CylindricalRegion 构建时直接从 pattern 结果获取上/下边界和内/外环信息
+     */
+    struct AnnotatedPolygon {
+        std::vector<Arc> arcs;
+        std::vector<tailor::BoundaryType> edgeTypes;  // 每条边在布尔运算结果中的边界类型
+        bool isOuter;  // true=外环 (PolyTree depth%2==0), false=内环/孔洞
+    };
+
     template<typename Drafting>
     class ConnectTypeOuterFirstWrapper;
 
@@ -657,6 +667,15 @@ namespace tailor_visualization {
         std::vector<PolygonWithHoleInfo> ExecuteOnlySubjectPatternWithHoles(
             const IFillType* fillType = nullptr,
             const IConnectType<tailor::Tailor<Arc, AA>::PatternDrafting>* connectType = nullptr);
+
+        /**
+         * @brief 执行 OnlySubjectPattern，保留 BoundaryType 和 PolyTree 层级信息
+         * 用于 CylindricalRegion 构建，避免自己计算上/下边界和内/外环。
+         * @param fillType 填充类型指针
+         * @return 标注后的多边形集合
+         */
+        std::vector<AnnotatedPolygon> ExecuteOnlySubjectPatternAnnotated(
+            const IFillType* fillType = nullptr);
 
         /**
          * @brief 创建并返回 Drafting（用于缓存）

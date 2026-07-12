@@ -1,5 +1,7 @@
 #include "CylindricalRegion.h"
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <map>
 #include <set>
@@ -172,43 +174,84 @@ int CylindricalArea::totalCount() const {
 
 
 // ============================================================================
-// 从条带多边形提取非收缩路径
+// 曲线组 (CurveGroup): 从多边形边界边切开的一段连续非边界曲线
 // ============================================================================
 
-/// 描述一段非边界路径的连接信息
-struct PathConnection {
-    size_t startIdx;    // 在原始多边形中的起始弧段索引
-    size_t length;      // 弧段数量
-    bool startsOnLeft;  // 起点在左边界
-    bool endsOnLeft;    // 终点在左边界
+/// 曲线组的终点信息
+struct SideY {
+    int side;   // 0=none(内部), 1=left, 2=right
+    double y;
 
-    double startY() const;  // 需要 arcs 引用，在 lambda 中定义
-    double endY() const;
+    bool operator<(const SideY& o) const {
+        if (side != o.side) return side < o.side;
+        return y < o.y;
+    }
+    bool operator==(const SideY& o) const {
+        return side == o.side && std::abs(y - o.y) < 1e-12;
+    }
+    bool operator!=(const SideY& o) const { return !(*this == o); }
 };
 
-/// 从触碰边界的多边形中提取非边界路径段
-///
-/// 步骤：
-///   1. 标记哪些弧段是纯边界段（整条边在 x=left 或 x=right 上）
-///   2. 提取连续的非边界弧段组（run）
-///   3. 根据每组首尾端点的边界位置确定方向
-///
-/// @return 提取到的 CylindricalLoop 列表（均为 isContractible==false）
-///
-static std::vector<CylindricalLoop> extractNonBoundaryPaths(
-    const std::vector<Arc>& poly,
+/// 用于 map 查找的整数键：将 y 乘以 1e7 后取整，消除浮点精度误差
+static constexpr double kIndexScale = 1e7;
+
+struct SideYInt {
+    int side;
+    int64_t yInt;
+
+    bool operator<(const SideYInt& o) const {
+        if (side != o.side) return side < o.side;
+        return yInt < o.yInt;
+    }
+};
+
+inline SideYInt toSideYInt(const SideY& p) {
+    return { p.side, static_cast<int64_t>(std::round(p.y * kIndexScale)) };
+}
+
+/// 圆柱面上两个位置是否等价：(bLeft, y) ≡ (bRight, y)
+inline bool cylEquivalent(const SideY& a, const SideY& b) {
+    if (a.side == 0 || b.side == 0) return false;
+    if (a.side != b.side) {
+        // 对侧同 Y → 圆柱面上同一点
+        return std::abs(a.y - b.y) < 1e-12;
+    }
+    // 同侧同 Y → 同一点
+    return a.side == b.side && std::abs(a.y - b.y) < 1e-12;
+}
+
+/// 判断两个 side 是否相同（物理上相同的边界线）
+inline bool sameSide(int a, int b) { return a == b; }
+
+/// 曲线组：一段切开口的非边界路径
+struct CurveGroup {
+    std::vector<Arc> arcs;
+    bool isOuter;         // true=外环, false=内环(hole)，直接从 PolyTree depth 获取
+
+    bool startIsUpper;    // 起点方向：Upper?（从 BoundaryType 获取）
+    bool endIsUpper;      // 终点方向：Upper?（从 BoundaryType 获取）
+    SideY startPos;       // 起点位置
+    SideY endPos;         // 终点位置
+    bool used = false;    // 是否已被合并
+};
+
+/// 从标注多边形中分割出曲线组
+/// 步骤：标记边界边 → 连续非边界段为一组
+/// 方向从 edgeTypes（BoundaryType）获取；内外环从 poly.isOuter 获取
+static std::vector<CurveGroup> splitIntoCurveGroups(
+    const AnnotatedPolygon& poly,
     double left, double right, double eps) {
 
-    const size_t n = poly.size();
+    const size_t n = poly.arcs.size();
     if (n < 2) return {};
 
-    // Step 1: 标记纯边界段
+    // 标记纯边界段
     std::vector<bool> isBdr(n);
     for (size_t i = 0; i < n; ++i) {
-        isBdr[i] = isPurelyBoundaryEdge(poly[i], left, right, eps);
+        isBdr[i] = isPurelyBoundaryEdge(poly.arcs[i], left, right, eps);
     }
 
-    // Step 2: 找到非边界弧段的连续运行（run）
+    // 找到非边界弧段的连续运行（run）
     struct Run { size_t start; size_t len; };
     std::vector<Run> runs;
 
@@ -223,219 +266,174 @@ static std::vector<CylindricalLoop> extractNonBoundaryPaths(
         }
     }
 
-    // 处理首尾相接的情况（多边形闭合，尾部非边界段与头部非边界段相连）
+    // 处理首尾相接（闭合多边形）
     if (runs.size() >= 2
         && runs[0].start == 0
         && runs.back().start + runs.back().len == n) {
-        // 合并首尾
         runs[0].start = runs.back().start;
         runs[0].len += runs.back().len;
         runs.pop_back();
     }
 
-    // Step 3: 将每个 run 转换为 CylindricalLoop
-    std::vector<CylindricalLoop> paths;
+    // 将每个 run 转换为 CurveGroup
+    std::vector<CurveGroup> groups;
     for (const auto& run : runs) {
-        CylindricalLoop loop;
-        loop.isContractible = false;
-        loop.arcs.reserve(run.len);
+        CurveGroup g;
+        g.isOuter = poly.isOuter;  // 从 PolyTree depth 获取，不用 signedArea
+        g.arcs.reserve(run.len);
         for (size_t j = 0; j < run.len; ++j) {
-            loop.arcs.push_back(poly[(run.start + j) % n]);
+            size_t idx = (run.start + j) % n;
+            g.arcs.push_back(poly.arcs[idx]);
         }
 
-        // 确定方向
-        double startX = loop.startPoint().x;
-        double endX = loop.endPoint().x;
+        // 计算起点位置
+        double sx = g.arcs.front().Point0().x;
+        double sy = g.arcs.front().Point0().y;
+        if (onLeftBoundary(sx, left, eps))
+            g.startPos = { 1, sy };
+        else if (onRightBoundary(sx, right, eps))
+            g.startPos = { 2, sy };
+        else
+            g.startPos = { 0, sy };
 
-        bool startOnLeft = onLeftBoundary(startX, left, eps);
-        bool endOnLeft = onLeftBoundary(endX, left, eps);
-        bool startOnRight = onRightBoundary(startX, right, eps);
-        bool endOnRight = onRightBoundary(endX, right, eps);
+        // 计算终点位置
+        double ex = g.arcs.back().Point1().x;
+        double ey = g.arcs.back().Point1().y;
+        if (onLeftBoundary(ex, left, eps))
+            g.endPos = { 1, ey };
+        else if (onRightBoundary(ex, right, eps))
+            g.endPos = { 2, ey };
+        else
+            g.endPos = { 0, ey };
 
-        if (startOnLeft && endOnRight) {
-            loop.leftToRight = true;   // left→right: 下边界
-        } else if (startOnRight && endOnLeft) {
-            loop.leftToRight = false;  // right→left: 上边界
-        } else if (startOnLeft && endOnLeft) {
-            // 两端都在左边界 → 特殊情况（触碰同一边界）
-            // 按 Y 判定：高 Y → 视为从右来（上边界），低 Y → 视为从右去（下边界）
-            loop.leftToRight = (loop.startPoint().y < loop.endPoint().y);
-        } else if (startOnRight && endOnRight) {
-            // 两端都在右边界
-            loop.leftToRight = (loop.startPoint().y > loop.endPoint().y);
-        } else {
-            // 未触碰边界的段 → 可能是内部的洞，标记为可缩
-            loop.isContractible = true;
-        }
+        // 从 BoundaryType 判定方向（不用几何计算）
+        // 起点方向 ← 第一条边，终点方向 ← 最后一条边
+        auto edgeTypeToUpper = [](tailor::BoundaryType bt) -> bool {
+            bool hasU = tailor::HasUpperBoundary(bt);
+            bool hasL = tailor::HasLowerBoundary(bt);
+            if (hasU && !hasL)  return true;
+            if (hasL && !hasU)  return false;
+            // 共轭边界或 Inside/Outside → 默认 Upper
+            return true;
+        };
 
-        paths.push_back(std::move(loop));
+        size_t firstIdx = run.start % n;
+        size_t lastIdx  = (run.start + run.len - 1) % n;
+        g.startIsUpper = edgeTypeToUpper(poly.edgeTypes[firstIdx]);
+        g.endIsUpper   = edgeTypeToUpper(poly.edgeTypes[lastIdx]);
+
+        groups.push_back(std::move(g));
     }
 
-    return paths;
+    return groups;
 }
 
 
-
 // ============================================================================
-// 通过几何位置匹配左右边界上的端点
+// 合并规则和环绕数判定
 // ============================================================================
 
-/// 从非收缩路径集合中构建条带区域
-///
-/// 当有多个非边界段时，需要按 Y 坐标将左右边界上的端点配对。
-/// 配对规则：Y 坐标最接近的左右端点配对。
-///
-/// @param paths 从多边形提取的非边界路径
-/// @return 条带区域列表
-///
-static std::vector<CylindricalArea> buildBandAreas(
-    std::vector<CylindricalLoop>& paths,
-    double left, double right, double eps) {
+/// 连接规则：判断两个曲线组是否可以首尾相连
+/// endGroup 的尾部 连接 startGroup 的首部
+static bool canConnect(const CurveGroup& endGroup, const CurveGroup& startGroup) {
+    // 必须是同级别：外环连外环，内环连内环
+    if (endGroup.isOuter != startGroup.isOuter) return false;
 
-    std::vector<CylindricalArea> areas;
+    // 位置必须等价（圆柱面上同一点）
+    if (!cylEquivalent(endGroup.endPos, startGroup.startPos)) return false;
 
-    // 分离可缩环（未触碰边界的段）
-    std::vector<CylindricalLoop> contractibleLoops;
-    std::vector<CylindricalLoop> nonContractPaths;
+    bool diffSide = !sameSide(endGroup.endPos.side, startGroup.startPos.side);
 
-    for (auto& p : paths) {
-        if (p.isContractible) {
-            contractibleLoops.push_back(std::move(p));
-        } else {
-            nonContractPaths.push_back(std::move(p));
+    if (diffSide) {
+        // 不同边界线上：上连上，下连下
+        return (endGroup.endIsUpper && startGroup.startIsUpper) ||
+               (!endGroup.endIsUpper && !startGroup.startIsUpper);
+    } else {
+        // 同一边界线上：上连下，下连上
+        return (endGroup.endIsUpper && !startGroup.startIsUpper) ||
+               (!endGroup.endIsUpper && startGroup.startIsUpper);
+    }
+}
+
+/// 用环绕数判定环是否为可缩环
+/// 遍历本环上所有边：如果起始点在右边界的母线上，
+///   如果起点方向为Upper，环绕数+1，否则环绕数-1。
+///
+/// @return 0=可缩环, +1=上不可缩环, -1=下不可缩环
+static int computeWinding(const std::vector<CurveGroup*>& loop,
+                          double right, double eps) {
+    int winding = 0;
+    for (auto* g : loop) {
+        if (g->startPos.side == 2) {  // 起点在右边界
+            if (g->startIsUpper)
+                winding += 1;
+            else
+                winding -= 1;
         }
     }
+    return winding;
+}
 
-    // 将可缩环包装为 contractible areas
-    for (auto& cl : contractibleLoops) {
-        CylindricalArea area;
-        area.boundary.push_back(std::move(cl));
-        areas.push_back(std::move(area));
-    }
+/// 从曲线组构成的环创建 CylindricalArea
+/// @param winding 环绕数: 0=可缩, +1=上band, -1=下band
+static CylindricalArea buildAreaFromLoop(std::vector<CurveGroup>& loop,
+                                          int winding) {
+    CylindricalArea area;
 
-    if (nonContractPaths.empty()) return areas;
-
-    // ---- 情况 1：恰好 2 段 → 一个条带区域 ----
-    if (nonContractPaths.size() == 2) {
-        // 确保 boundary[0] 是上边界 (right→left)，boundary[1] 是下边界 (left→right)
-        CylindricalLoop& a = nonContractPaths[0];
-        CylindricalLoop& b = nonContractPaths[1];
-
-        CylindricalArea band;
-        if (!a.leftToRight && b.leftToRight) {
-            // a = upper (right→left), b = lower (left→right)
-            band.boundary.push_back(std::move(a));
-            band.boundary.push_back(std::move(b));
-        } else if (!b.leftToRight && a.leftToRight) {
-            // b = upper, a = lower
-            band.boundary.push_back(std::move(b));
-            band.boundary.push_back(std::move(a));
-        } else {
-            // 方向一致 → 用 Y 排序
-            auto aY = a.yRange();
-            auto bY = b.yRange();
-            // Y 值大的作为上边界 (right→left 方向)
-            bool aIsUpper = aY.first > bY.first;
-            if (!aIsUpper) std::swap(a, b);
-            // 强制方向
-            a.leftToRight = false;  // upper: right→left
-            b.leftToRight = true;   // lower: left→right
-            band.boundary.push_back(std::move(a));
-            band.boundary.push_back(std::move(b));
+    if (winding == 0) {
+        // 可缩区域：拼接所有曲线组
+        CylindricalLoop contractLoop;
+        contractLoop.isContractible = true;
+        for (auto& g : loop) {
+            for (auto& arc : g.arcs)
+                contractLoop.arcs.push_back(std::move(arc));
         }
-        areas.push_back(std::move(band));
-        return areas;
-    }
+        area.boundary.push_back(std::move(contractLoop));
+    } else {
+        // Band区域：分离上下边界
+        std::vector<Arc> upperArcs, lowerArcs;
 
-    // ---- 情况 2：多于 2 段 → 分离上/下边界，按类别配对 ----
-    //
-    // 核心规则：上边界路径 (right→left) 只能与下边界路径 (left→right) 配对。
-    // 每个 band 由一条上边界 + 一条下边界组成。
-    //
-    // 先按端点位置确定每条路径的类别，然后按 Y 排序后一一配对。
-    //
-    std::vector<CylindricalLoop> upperPaths;  // right→left
-    std::vector<CylindricalLoop> lowerPaths;  // left→right
-    std::vector<CylindricalLoop> unknown;     // 无法确定方向的
-
-    for (auto& p : nonContractPaths) {
-        if (p.arcs.empty()) continue;
-        double sx = p.startPoint().x;
-        double ex = p.endPoint().x;
-
-        if (onRightBoundary(sx, right, eps) && onLeftBoundary(ex, left, eps)) {
-            // right→left: 上边界
-            p.leftToRight = false;
-            upperPaths.push_back(std::move(p));
-        } else if (onLeftBoundary(sx, left, eps) && onRightBoundary(ex, right, eps)) {
-            // left→right: 下边界
-            p.leftToRight = true;
-            lowerPaths.push_back(std::move(p));
-        } else {
-            // 无法确定方向（两端都在同侧或内部）
-            // 用 Y 陡度判断：如果起点 Y > 终点 Y，则为上边界
-            if (onLeftBoundary(sx, left, eps) && onLeftBoundary(ex, left, eps)) {
-                // 两端都在左边界 → 按 Y 判定
-                p.leftToRight = (p.startPoint().y < p.endPoint().y);
-                if (p.leftToRight) lowerPaths.push_back(std::move(p));
-                else upperPaths.push_back(std::move(p));
-            } else if (onRightBoundary(sx, right, eps) && onRightBoundary(ex, right, eps)) {
-                // 两端都在右边界
-                p.leftToRight = (p.startPoint().y > p.endPoint().y);
-                if (p.leftToRight) lowerPaths.push_back(std::move(p));
-                else upperPaths.push_back(std::move(p));
+        for (auto& g : loop) {
+            if (g.startIsUpper) {
+                for (auto& arc : g.arcs)
+                    upperArcs.push_back(std::move(arc));
             } else {
-                unknown.push_back(std::move(p));
+                for (auto& arc : g.arcs)
+                    lowerArcs.push_back(std::move(arc));
             }
         }
-    }
 
-    // 处理无法确定方向的路径 → 当作可缩环
-    for (auto& p : unknown) {
-        p.isContractible = true;
-        CylindricalArea area;
-        area.boundary.push_back(std::move(p));
-        areas.push_back(std::move(area));
-    }
+        if (!upperArcs.empty() && !lowerArcs.empty()) {
+            CylindricalLoop upperLoop;
+            upperLoop.isContractible = false;
+            upperLoop.leftToRight = false;  // right→left = upper
+            upperLoop.arcs = std::move(upperArcs);
 
-    // 按 Y 范围中点排序，使配对的上下边界在 Y 轴上对齐
-    auto sortByYMid = [](std::vector<CylindricalLoop>& paths) {
-        std::sort(paths.begin(), paths.end(),
-            [](const CylindricalLoop& a, const CylindricalLoop& b) {
-                double aMid = (a.yRange().first + a.yRange().second) * 0.5;
-                double bMid = (b.yRange().first + b.yRange().second) * 0.5;
-                return aMid < bMid;
-            });
-    };
-    sortByYMid(upperPaths);
-    sortByYMid(lowerPaths);
+            CylindricalLoop lowerLoop;
+            lowerLoop.isContractible = false;
+            lowerLoop.leftToRight = true;   // left→right = lower
+            lowerLoop.arcs = std::move(lowerArcs);
 
-    // 上边界与下边界按 Y 顺序一一配对，组成 band 区域
-    size_t pairCount = std::min(upperPaths.size(), lowerPaths.size());
-    for (size_t i = 0; i < pairCount; ++i) {
-        CylindricalArea band;
-        band.boundary.push_back(std::move(upperPaths[i]));  // boundary[0] = 上边界
-        band.boundary.push_back(std::move(lowerPaths[i]));  // boundary[1] = 下边界
-        if (band.isValid()) {
-            areas.push_back(std::move(band));
+            if (winding == -1) {
+                // 下不可缩环：交换上下边界
+                area.boundary.push_back(std::move(lowerLoop));
+                area.boundary.push_back(std::move(upperLoop));
+            } else {
+                // +1 上不可缩环
+                area.boundary.push_back(std::move(upperLoop));
+                area.boundary.push_back(std::move(lowerLoop));
+            }
+        } else {
+            // 退化：只有一种方向 → 作为可缩环
+            CylindricalLoop contractLoop;
+            contractLoop.isContractible = true;
+            auto& src = upperArcs.empty() ? lowerArcs : upperArcs;
+            contractLoop.arcs = std::move(src);
+            area.boundary.push_back(std::move(contractLoop));
         }
     }
 
-    // 剩余未配对的路径 → 当作可缩环（退化情况）
-    for (size_t i = pairCount; i < upperPaths.size(); ++i) {
-        upperPaths[i].isContractible = true;
-        CylindricalArea area;
-        area.boundary.push_back(std::move(upperPaths[i]));
-        areas.push_back(std::move(area));
-    }
-    for (size_t i = pairCount; i < lowerPaths.size(); ++i) {
-        lowerPaths[i].isContractible = true;
-        CylindricalArea area;
-        area.boundary.push_back(std::move(lowerPaths[i]));
-        areas.push_back(std::move(area));
-    }
-
-    return areas;
+    return area;
 }
 
 
@@ -452,7 +450,6 @@ static bool contractibleInsideBand(
     if (!contractible.isContractibleArea() || !band.isBand()) return false;
     if (contractible.boundary[0].arcs.empty()) return false;
 
-    // 取 contractible 区域的第一个顶点作为采样点
     double x = contractible.boundary[0].arcs[0].Point0().x;
     double y = contractible.boundary[0].arcs[0].Point0().y;
 
@@ -475,169 +472,224 @@ static bool contractibleInsideContractible(
 }
 
 std::vector<CylindricalArea> BuildCylindricalAreas(
-    const std::vector<std::vector<Arc>>& polygons,
+    const std::vector<AnnotatedPolygon>& polygons,
     double boundaryLeft, double boundaryRight,
     double eps) {
 
-    std::vector<CylindricalArea> result;
-
-    if (polygons.empty()) return result;
+    if (polygons.empty()) return {};
 
     // ====================================================================
-    // Step 1: 分类多边形 → 内部多边形 vs 边界多边形
+    // Step 1: 找出所有周期并集后在两个边缘线上的边
+    //         并按此将贴着分割线的多边形分割成曲线组
     // ====================================================================
-    std::vector<const std::vector<Arc>*> interiorPolys;
-    std::vector<const std::vector<Arc>*> boundaryPolys;
+    std::vector<CurveGroup> allGroups;       // 所有从边界多边形切出的曲线组
+    std::vector<CylindricalArea> contractibleAreas; // 内部多边形（不触边）
 
     for (const auto& poly : polygons) {
-        if (poly.empty()) continue;
-        if (touchesBoundary(poly, boundaryLeft, boundaryRight, eps)) {
-            boundaryPolys.push_back(&poly);
+        if (poly.arcs.empty()) continue;
+
+        if (!touchesBoundary(poly.arcs, boundaryLeft, boundaryRight, eps)) {
+            // 内部多边形：直接作为完整的可缩区域
+            CylindricalLoop loop;
+            loop.arcs = poly.arcs;
+            loop.isContractible = true;
+
+            CylindricalArea area;
+            area.boundary.push_back(std::move(loop));
+            contractibleAreas.push_back(std::move(area));
         } else {
-            interiorPolys.push_back(&poly);
+            // 边界多边形：分割成曲线组（从 poly.isOuter 获取内外环，从 edgeTypes 获取方向）
+            auto groups = splitIntoCurveGroups(
+                poly, boundaryLeft, boundaryRight, eps);
+            for (auto& g : groups) {
+                allGroups.push_back(std::move(g));
+            }
+        }
+    }
+
+    if (allGroups.empty()) {
+        // 没有边界多边形 → 只需要构建嵌套树
+        std::vector<CylindricalArea> result;
+        std::sort(contractibleAreas.begin(), contractibleAreas.end(),
+            [](const CylindricalArea& a, const CylindricalArea& b) {
+                double aArea = std::abs(signedArea(a.boundary[0].arcs));
+                double bArea = std::abs(signedArea(b.boundary[0].arcs));
+                return aArea > bArea;
+            });
+        std::vector<bool> assigned(contractibleAreas.size(), false);
+        for (size_t i = 0; i < contractibleAreas.size(); ++i) {
+            if (assigned[i]) continue;
+            for (size_t j = i + 1; j < contractibleAreas.size(); ++j) {
+                if (assigned[j]) continue;
+                if (contractibleInsideContractible(contractibleAreas[j],
+                    contractibleAreas[i], boundaryLeft, boundaryRight, eps)) {
+                    contractibleAreas[i].children.push_back(
+                        std::move(contractibleAreas[j]));
+                    assigned[j] = true;
+                }
+            }
+            result.push_back(std::move(contractibleAreas[i]));
+        }
+        return result;
+    }
+
+    // ====================================================================
+    // Step 2: 统计曲线组的首尾点，按规则构建连接图
+    // ====================================================================
+
+    // 构建端点索引: SideYInt → 以该点为起点的曲线组索引
+    // 使用整数键消除 double 精度误差导致 map 查找失败的问题
+    std::map<SideYInt, std::vector<size_t>> startIndex;
+    for (size_t i = 0; i < allGroups.size(); ++i) {
+        if (allGroups[i].startPos.side != 0) {
+            startIndex[toSideYInt(allGroups[i].startPos)].push_back(i);
+        }
+    }
+
+    // 为每个曲线组找后继
+    // nextGroup[i] = 后继曲线组索引，-1 表示无后继
+    std::vector<int> nextGroup(allGroups.size(), -1);
+
+    for (size_t i = 0; i < allGroups.size(); ++i) {
+        const auto& eg = allGroups[i];
+        if (eg.endPos.side == 0) continue;  // 终点在内部 → 不需要连接
+
+        SideYInt matchKey = toSideYInt(eg.endPos);
+
+        // 尝试对侧匹配: (side, y) → (3-side, y)
+        {
+            SideYInt oppositeKey = { 3 - eg.endPos.side, matchKey.yInt };
+            auto it = startIndex.find(oppositeKey);
+            if (it != startIndex.end()) {
+                for (size_t cand : it->second) {
+                    if (allGroups[cand].used) continue;
+                    if (canConnect(eg, allGroups[cand])) {
+                        nextGroup[i] = static_cast<int>(cand);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 若对侧无匹配，尝试同侧匹配
+        if (nextGroup[i] < 0) {
+            auto it = startIndex.find(matchKey);
+            if (it != startIndex.end()) {
+                for (size_t cand : it->second) {
+                    if (allGroups[cand].used) continue;
+                    if (canConnect(eg, allGroups[cand])) {
+                        nextGroup[i] = static_cast<int>(cand);
+                        break;
+                    }
+                }
+            }
         }
     }
 
     // ====================================================================
-    // Step 2: 处理边界多边形 → 提取非边界路径 → 构建 band areas
+    // Step 3: 沿连接图遍历形成环
     // ====================================================================
     std::vector<CylindricalArea> bandAreas;
-    std::vector<CylindricalArea> orphanContractibles;  // 从边界多边形中提取出的可缩环
 
-    for (const auto* polyPtr : boundaryPolys) {
-        const auto& poly = *polyPtr;
+    for (size_t i = 0; i < allGroups.size(); ++i) {
+        if (allGroups[i].used) continue;
 
-        // 提取非边界路径段
-        auto paths = extractNonBoundaryPaths(poly, boundaryLeft, boundaryRight, eps);
+        // 沿 nextGroup 链遍历，收集环的曲线组
+        std::vector<CurveGroup*> loopPtrs;
+        int cur = static_cast<int>(i);
+        int loopStart = cur;
 
-        if (paths.empty()) {
-            // 整个多边形都在边界上（退化情况）→ 跳过
-            continue;
+        do {
+            allGroups[cur].used = true;
+            loopPtrs.push_back(&allGroups[cur]);
+            cur = nextGroup[cur];
+        } while (cur >= 0 && cur != loopStart && !allGroups[cur].used);
+
+        if (loopPtrs.empty()) continue;
+
+        // Step 4: 用环绕数判定环类型
+        int winding = computeWinding(loopPtrs, boundaryRight, eps);
+
+        // 收集曲线组数据构建 area
+        std::vector<CurveGroup> loopCopy;
+        loopCopy.reserve(loopPtrs.size());
+        for (auto* gp : loopPtrs) {
+            loopCopy.push_back(std::move(*gp));
         }
 
-        // 分离可缩和非可缩路径
-        bool hasNonContract = false;
-        for (const auto& p : paths) {
-            if (!p.isContractible) { hasNonContract = true; break; }
-        }
+        CylindricalArea area = buildAreaFromLoop(loopCopy, winding);
 
-        if (!hasNonContract) {
-            // 所有路径都不触碰边界 → 都是可缩环
-            for (auto& p : paths) {
-                CylindricalArea area;
-                area.boundary.push_back(std::move(p));
-                orphanContractibles.push_back(std::move(area));
+        if (area.isBand()) {
+            // 检查该 band 是否包含之前标记为 contractible 的环
+            // 把同源 contractible area 分到 band 内部
+            for (size_t ci = 0; ci < contractibleAreas.size(); ++ci) {
+                if (!contractibleAreas[ci].isContractibleArea()) continue;
+                if (contractibleInsideBand(contractibleAreas[ci], area,
+                                           boundaryLeft, boundaryRight, eps)) {
+                    area.children.push_back(
+                        std::move(contractibleAreas[ci]));
+                    contractibleAreas[ci].boundary.clear(); // 标记已分配
+                }
             }
-            continue;
-        }
 
-        // 构建 band areas
-        auto bands = buildBandAreas(paths, boundaryLeft, boundaryRight, eps);
-        for (auto& area : bands) {
-            if (area.isBand()) {
-                bandAreas.push_back(std::move(area));
-            } else if (area.isContractibleArea()) {
-                orphanContractibles.push_back(std::move(area));
-            }
+            bandAreas.push_back(std::move(area));
+        } else if (area.isContractibleArea()) {
+            contractibleAreas.push_back(std::move(area));
         }
     }
+
+    // 清理已被分配到 band 内的 contractible areas
+    contractibleAreas.erase(
+        std::remove_if(contractibleAreas.begin(), contractibleAreas.end(),
+            [](const CylindricalArea& a) { return !a.isValid(); }),
+        contractibleAreas.end());
 
     // ====================================================================
-    // Step 3: 处理内部多边形 → 直接作为 contractible areas
+    // Step 5: 构建最终嵌套树
     // ====================================================================
-    std::vector<CylindricalArea> contractibleAreas;
-    for (const auto* polyPtr : interiorPolys) {
-        CylindricalLoop loop;
-        loop.arcs = *polyPtr;
-        loop.isContractible = true;
+    std::vector<CylindricalArea> result;
 
-        CylindricalArea area;
-        area.boundary.push_back(std::move(loop));
-        contractibleAreas.push_back(std::move(area));
+    // 5a: 未被 band 包含的 contractible → 顶层
+    for (auto& ca : contractibleAreas) {
+        if (!ca.isValid()) continue;
+        result.push_back(std::move(ca));
     }
 
-    // 合并 orphan contractibles
-    contractibleAreas.insert(contractibleAreas.end(),
-        std::make_move_iterator(orphanContractibles.begin()),
-        std::make_move_iterator(orphanContractibles.end()));
+    // 5b: 顶层 contractible 相互嵌套
+    if (result.size() > 1) {
+        std::sort(result.begin(), result.end(),
+            [](const CylindricalArea& a, const CylindricalArea& b) {
+                double aArea = std::abs(signedArea(a.boundary[0].arcs));
+                double bArea = std::abs(signedArea(b.boundary[0].arcs));
+                return aArea > bArea;
+            });
 
-    // ====================================================================
-    // Step 4: 构建嵌套树
-    // ====================================================================
+        std::vector<bool> assigned(result.size(), false);
+        std::vector<CylindricalArea> nested;
 
-    // 4a: 将 contractible areas 分配到 band areas 内部
-    std::vector<bool> contractibleAssigned(contractibleAreas.size(), false);
-
-    for (size_t ci = 0; ci < contractibleAreas.size(); ++ci) {
-        for (auto& ba : bandAreas) {
-            if (contractibleInsideBand(contractibleAreas[ci], ba,
-                                       boundaryLeft, boundaryRight, eps)) {
-                ba.children.push_back(std::move(contractibleAreas[ci]));
-                contractibleAssigned[ci] = true;
-                break;
+        for (size_t i = 0; i < result.size(); ++i) {
+            if (assigned[i]) continue;
+            if (!result[i].isContractibleArea()) {
+                nested.push_back(std::move(result[i]));
+                continue;
             }
-        }
-    }
-
-    // 4b: 未被分配到 band 的 contractible areas → 顶层
-    for (size_t ci = 0; ci < contractibleAreas.size(); ++ci) {
-        if (!contractibleAssigned[ci]) {
-            result.push_back(std::move(contractibleAreas[ci]));
-        }
-    }
-
-    // 4c: 将 contractible areas 互相嵌套（标准 PolyTree 包含关系）
-    //     使用类似于 PolyTree 的做法：偶数层=outer, 奇数层=hole
-    //     简化：先展平所有顶层 contractible，再重新建立包含树
-    //
-    //     注意：此步骤处理的是顶层 contractible areas 之间的包含关系。
-    //           bandAreas 内部的 contractible 不参与此步骤。
-    //
-    //     实现：按面积从大到小排序，大者包含小者。
-
-    // 对顶层 contractible areas 按包围盒面积排序
-    std::sort(result.begin(), result.end(),
-        [](const CylindricalArea& a, const CylindricalArea& b) {
-            auto [aYMin, aYMax] = a.yRange();
-            auto [bYMin, bYMax] = b.yRange();
-            double aH = aYMax - aYMin;
-            double bH = bYMax - bYMin;
-            if (aH != bH) return aH > bH;  // 大的在前
-            // 用 signed area 做次级排序
-            double aArea = std::abs(signedArea(a.boundary[0].arcs));
-            double bArea = std::abs(signedArea(b.boundary[0].arcs));
-            return aArea > bArea;
-        });
-
-    // 构建包含树
-    std::vector<bool> assigned(result.size(), false);
-    std::vector<CylindricalArea> finalResult;
-
-    for (size_t i = 0; i < result.size(); ++i) {
-        if (assigned[i]) continue;
-        if (!result[i].isContractibleArea()) {
-            finalResult.push_back(std::move(result[i]));
-            continue;
-        }
-
-        // 尝试将较小的 contractible areas 嵌套到 result[i] 中
-        for (size_t j = i + 1; j < result.size(); ++j) {
-            if (assigned[j]) continue;
-            if (!result[j].isContractibleArea()) continue;
-
-            if (contractibleInsideContractible(result[j], result[i],
-                                               boundaryLeft, boundaryRight, eps)) {
-                result[i].children.push_back(std::move(result[j]));
-                assigned[j] = true;
+            for (size_t j = i + 1; j < result.size(); ++j) {
+                if (assigned[j]) continue;
+                if (!result[j].isContractibleArea()) continue;
+                if (contractibleInsideContractible(result[j], result[i],
+                                                   boundaryLeft, boundaryRight, eps)) {
+                    result[i].children.push_back(std::move(result[j]));
+                    assigned[j] = true;
+                }
             }
+            nested.push_back(std::move(result[i]));
         }
-        finalResult.push_back(std::move(result[i]));
+        result = std::move(nested);
     }
 
-    // 4d: 对 band areas 内部的 contractible children 处理嵌套，并加入最终结果
+    // 5c: band 内部 children 嵌套 + 加入最终结果
     for (auto& ba : bandAreas) {
         if (ba.children.size() > 1) {
-            // 按面积排序
             std::sort(ba.children.begin(), ba.children.end(),
                 [](const CylindricalArea& a, const CylindricalArea& b) {
                     double aArea = std::abs(signedArea(a.boundary[0].arcs));
@@ -663,10 +715,10 @@ std::vector<CylindricalArea> BuildCylindricalAreas(
             ba.children = std::move(nestedChildren);
         }
 
-        finalResult.push_back(std::move(ba));
+        result.push_back(std::move(ba));
     }
 
-    return finalResult;
+    return result;
 }
 
 

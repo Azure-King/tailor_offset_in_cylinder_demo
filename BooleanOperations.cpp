@@ -1160,6 +1160,61 @@ namespace tailor_visualization {
         });
     }
 
+    std::vector<AnnotatedPolygon> BooleanOperations::ExecuteOnlySubjectPatternAnnotated(
+        const IFillType* fillType) {
+        return RetryTailorExecute([&]() -> std::vector<AnnotatedPolygon> {
+            if (subjectPolygons_.empty()) {
+                return {};
+            }
+
+            ArcTailor tailor(arcAnalysis_);
+
+            for (const auto& subjectPoly : subjectPolygons_) {
+                auto monotonicSubject = SplitToMonotonic(subjectPoly);
+                tailor.AddToPolygonSetB(monotonicSubject.begin(), monotonicSubject.end());
+            }
+
+            auto drafting = tailor.Execute();
+
+            std::vector<AnnotatedPolygon> resultPolygons;
+
+            std::function<void(const tailor::Polygon<tailor::PolyEdgeInfo>&, int)> fun =
+                [&](const tailor::Polygon<tailor::PolyEdgeInfo>& poly, int depth) -> void {
+                std::vector<Arc> polygonEdges;
+                std::vector<tailor::BoundaryType> types;
+                for (const auto& edge_info : poly.edges) {
+                    if (edge_info.type == tailor::BoundaryType::UpperBoundary) {
+                        // 上边界边需要反转
+                        const auto& edge = drafting.edgeEvent[edge_info.id].edge;
+                        Arc reversedEdge(edge.Point1(), edge.Point0(), -edge.Bulge(), edge.Data());
+                        polygonEdges.push_back(reversedEdge);
+                    } else {
+                        const auto& edge = drafting.edgeEvent[edge_info.id].edge;
+                        polygonEdges.push_back(edge);
+                    }
+                    types.push_back(edge_info.type);
+                }
+                if (!polygonEdges.empty()) {
+                    bool isOuter = (depth % 2 == 0);
+                    resultPolygons.push_back({ polygonEdges, types, isOuter });
+                }
+                };
+
+            auto fillTypeVariant = ToFillTypeVariant(fillType);
+
+            std::visit([&](auto&& type) {
+                using FillType = std::decay_t<decltype(type)>;
+                tailor::PolygonSetBPattern<FillType, tailor::ConnectTypeOuterFirst> pattern;
+                auto polytree = pattern.Stitch(drafting);
+                for (const auto& tree : polytree) {
+                    ForEachPolyTreeWithDepth<tailor::PolyEdgeInfo>(tree, 0, fun);
+                }
+                }, fillTypeVariant.variant);
+
+            return resultPolygons;
+        });
+    }
+
     std::vector<PolygonWithHoleInfo> BooleanOperations::ExecuteWithHoles(
         BooleanOperation operation,
         const IFillType* clipFillType,

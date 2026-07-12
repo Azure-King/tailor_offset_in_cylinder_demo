@@ -175,15 +175,16 @@ public:
 // Builder 函数：从 ClipToStrip 输出构建 CylindricalArea 树
 // ============================================================================
 
-/// 从合并后的平面多边形列表构建圆柱区域树
+/// 从标注后的多边形列表构建圆柱区域树
 ///
-/// @param polygons       ClipToStrip + union 后的多边形集合
+/// @param polygons       ClipToStrip + union 后带 BoundaryType 标注的多边形集合
+///                       每个多边形标注了每条边的上/下边界类型以及内/外环属性
 /// @param boundaryLeft   条带左边界 X 坐标
 /// @param boundaryRight  条带右边界 X 坐标
 /// @param eps            判断顶点是否在边界上的容差
 /// @return 顶层 CylindricalArea 列表（band areas 和 contractible areas）
 std::vector<CylindricalArea> BuildCylindricalAreas(
-    const std::vector<std::vector<Arc>>& polygons,
+    const std::vector<AnnotatedPolygon>& polygons,
     double boundaryLeft, double boundaryRight,
     double eps = 1e-9);
 
