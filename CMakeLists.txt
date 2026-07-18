@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(TailorOffsetDemo LANGUAGES CXX)
+project(TailorOffsetInCylinderDemo LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON) 
@@ -34,7 +34,7 @@ endif()
 # 查找 Qt6
 find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGLWidgets)
 
-qt_add_executable(TailorOffsetDemo
+qt_add_executable(TailorOffsetInCylinderDemo
     main.cpp
     Sketch2DView.h
     Sketch2DView.cpp
@@ -53,13 +53,15 @@ qt_add_executable(TailorOffsetDemo
     PeriodicClippingViews.cpp
     CylindricalRegion.h
     CylindricalRegion.cpp
+    CylindricalOffsetViews.h
+    CylindricalOffsetViews.cpp
 )
 
 # 添加第三方库路径
 set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
-target_include_directories(TailorOffsetDemo PRIVATE
+target_include_directories(TailorOffsetInCylinderDemo PRIVATE
     "${THIRD_PARTY_DIR}/tailor/include/tailor"
     "${THIRD_PARTY_DIR}/tailor/include"
 )
 
-target_link_libraries(TailorOffsetDemo PRIVATE Qt6::Widgets Qt6::OpenGLWidgets)
+target_link_libraries(TailorOffsetInCylinderDemo PRIVATE Qt6::Widgets Qt6::OpenGLWidgets)

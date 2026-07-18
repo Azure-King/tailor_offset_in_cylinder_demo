@@ -460,6 +460,9 @@ void FourViewContainer::processPeriodicClip() {
         auto mergedAnnotated = boolOp.ExecuteOnlySubjectPatternAnnotated(
             static_cast<const tailor_visualization::IFillType*>(nullptr));
 
+        // 保存 View 7 并集结果，供圆柱偏置流水线使用
+        m_mergedAnnotated = mergedAnnotated;
+
         // --- 构建圆柱区域树（放在渲染之前，用于区域颜色分配）---
         m_cylindricalAreaTree = tailor_visualization::BuildCylindricalAreas(
             mergedAnnotated, bLeft, bRight);
@@ -656,73 +659,584 @@ void FourViewContainer::buildRegionTree(QTreeWidget* tree) const {
     tree->clear();
     tree->setSelectionMode(QAbstractItemView::ExtendedSelection);
 
-    if (m_cylindricalAreaTree.empty()) {
+    bool hasOriginal = !m_cylindricalAreaTree.empty();
+    bool hasOffset = !m_offsetCylindricalAreaTree.empty();
+
+    if (!hasOriginal && !hasOffset) {
         auto* placeholder = new QTreeWidgetItem(tree);
         placeholder->setText(0, "(无区域结果 — 请先绘制多边形并运行流水线)");
         placeholder->setForeground(0, QColor(128, 128, 128));
         return;
     }
 
-    const int fillCount = m_cylindricalResultFillCount;
+    // 可切换的 map 指针，供 buildAreaNodes 通过引用捕获使用
+    const std::map<const tailor_visualization::CylindricalArea*, QVector<int>>* highlightMap = nullptr;
+    const std::map<const tailor_visualization::CylindricalArea*, std::vector<int>>* loopEdgeCounts = nullptr;
 
-    // 直接遍历 BuildCylindricalAreas 返回的顶层区域（不递归子区域），
-    // 每个顶层区域对应一个树控件节点
-    for (size_t ai = 0; ai < m_cylindricalAreaTree.size(); ++ai) {
-        const auto& area = m_cylindricalAreaTree[ai];
+    // 辅助：为一个区域树构建子树（递归处理子区域）
+    std::function<void(const std::vector<tailor_visualization::CylindricalArea>&,
+        int, int, QTreeWidgetItem*)> buildAreaNodes;
+    buildAreaNodes = [&](
+        const std::vector<tailor_visualization::CylindricalArea>& areaTree,
+        int fillCount, int depth,
+        QTreeWidgetItem* parent) {
 
-        auto it = m_areaHighlightIndices.find(&area);
-        QVector<int> allIndices;
-        if (it != m_areaHighlightIndices.end()) allIndices = it->second;
+        for (size_t ai = 0; ai < areaTree.size(); ++ai) {
+            const auto& area = areaTree[ai];
 
-        QVector<int> edgeIndices;
-        for (int idx : allIndices) {
-            if (idx >= fillCount) edgeIndices.append(idx);
+            QVector<int> allIndices;
+            if (highlightMap) {
+                auto it = highlightMap->find(&area);
+                if (it != highlightMap->end()) allIndices = it->second;
+            }
+
+            QVector<int> edgeIndices;
+            for (int idx : allIndices) {
+                if (idx >= fillCount) edgeIndices.append(idx);
+            }
+
+            bool isChild = (depth > 0);
+            QString areaType = area.isBand() ? "条带" : "可缩";
+            QString areaLabel = isChild
+                ? QString("子区域%1(%2) [%3]").arg(depth).arg(ai + 1).arg(areaType)
+                : QString("区域%1 [%2]").arg(ai + 1).arg(areaType);
+            auto* areaItem = new QTreeWidgetItem(parent);
+            areaItem->setText(0, areaLabel);
+            areaItem->setData(0, Qt::UserRole, QVariant::fromValue(allIndices));
+
+            std::vector<int> loopCounts;
+            if (loopEdgeCounts) {
+                auto countsIt = loopEdgeCounts->find(&area);
+                if (countsIt != loopEdgeCounts->end()) loopCounts = countsIt->second;
+            }
+
+            if (area.isBand()) {
+                QVector<int> upperIndices, lowerIndices;
+                int edgeOffset = 0;
+                for (size_t li = 0; li < area.boundary.size(); ++li) {
+                    int count = (li < loopCounts.size()) ? loopCounts[li] : 0;
+                    QVector<int>& target =
+                        area.boundary[li].leftToRight ? lowerIndices : upperIndices;
+                    for (int e = 0;
+                         e < count && (edgeOffset + e) < (int)edgeIndices.size();
+                         ++e)
+                        target.append(edgeIndices[edgeOffset + e]);
+                    edgeOffset += count;
+                }
+
+                if (!upperIndices.isEmpty()) {
+                    auto* item = new QTreeWidgetItem(areaItem);
+                    item->setText(0, "上边界");
+                    item->setData(0, Qt::UserRole,
+                        QVariant::fromValue(upperIndices));
+                }
+                if (!lowerIndices.isEmpty()) {
+                    auto* item = new QTreeWidgetItem(areaItem);
+                    item->setText(0, "下边界");
+                    item->setData(0, Qt::UserRole,
+                        QVariant::fromValue(lowerIndices));
+                }
+            } else {
+                if (!edgeIndices.isEmpty()) {
+                    auto* item = new QTreeWidgetItem(areaItem);
+                    item->setText(0, "边界");
+                    item->setData(0, Qt::UserRole,
+                        QVariant::fromValue(edgeIndices));
+                }
+            }
+
+            // 递归子区域
+            if (!area.children.empty()) {
+                buildAreaNodes(area.children, fillCount, depth + 1, areaItem);
+            }
+        }
+    };
+
+    // ---- 原始区域 ----
+    if (hasOriginal) {
+        auto* origHeader = new QTreeWidgetItem(tree);
+        origHeader->setText(0, "原始区域");
+        origHeader->setForeground(0, QColor(60, 120, 200));
+        QFont boldFont = origHeader->font(0);
+        boldFont.setBold(true);
+        origHeader->setFont(0, boldFont);
+        // 不设置 UserRole，避免选中时误高亮
+        origHeader->setFlags(origHeader->flags() & ~Qt::ItemIsSelectable);
+        origHeader->setData(0, Qt::UserRole,
+            QVariant::fromValue(QVector<int>()));
+
+        highlightMap = &m_areaHighlightIndices;
+        loopEdgeCounts = &m_areaLoopEdgeCounts;
+        buildAreaNodes(m_cylindricalAreaTree,
+            m_cylindricalResultFillCount, 0, origHeader);
+    }
+
+    // ---- 偏置区域 ----
+    if (hasOffset) {
+        auto* offsetHeader = new QTreeWidgetItem(tree);
+        offsetHeader->setText(0, "偏置区域");
+        offsetHeader->setForeground(0, QColor(60, 170, 60));
+        QFont boldFont = offsetHeader->font(0);
+        boldFont.setBold(true);
+        offsetHeader->setFont(0, boldFont);
+        offsetHeader->setFlags(offsetHeader->flags() & ~Qt::ItemIsSelectable);
+        offsetHeader->setData(0, Qt::UserRole,
+            QVariant::fromValue(QVector<int>()));
+
+        highlightMap = &m_offsetHighlightIndices;
+        loopEdgeCounts = &m_offsetLoopEdgeCounts;
+        buildAreaNodes(m_offsetCylindricalAreaTree,
+            m_offsetResultFillCount, 0, offsetHeader);
+    }
+
+    tree->expandAll();
+}
+
+void FourViewContainer::processCylindricalOffset(double distance) {
+    using namespace tailor_visualization;
+    using ArcType = Arc;
+    using PointType = ArcPoint;
+
+    if (m_cylindricalAreaTree.empty() || m_mergedAnnotated.empty()) {
+        return;
+    }
+
+    double bLeft = static_cast<double>(m_mainView->boundaryLeft());
+    double bRight = static_cast<double>(m_mainView->boundaryRight());
+    double absDist = std::abs(distance);
+
+    // ===== Step 1: 收集圆柱区域树中所有边界 loop =====
+    std::vector<std::vector<ArcType>> boundaryLoops;
+    std::function<void(const std::vector<CylindricalArea>&)> collectLoops;
+    collectLoops = [&](const std::vector<CylindricalArea>& areas) {
+        for (const auto& area : areas) {
+            for (const auto& loop : area.boundary) {
+                if (!loop.arcs.empty()) {
+                    boundaryLoops.push_back(loop.arcs);
+                }
+            }
+            collectLoops(area.children);
+        }
+    };
+    collectLoops(m_cylindricalAreaTree);
+
+    if (boundaryLoops.empty()) return;
+
+    std::cout << "[CylOffset] Extracted " << boundaryLoops.size()
+        << " boundary loops, distance=" << distance << std::endl;
+
+    // ===== Step 2: 每条边界 → 零面积多边形 → 偏置(abs) → 去自交 =====
+    std::vector<std::vector<ArcType>> allOffsetBoundaries;
+
+    for (auto& loop : boundaryLoops) {
+        size_t n = loop.size();
+        if (n < 2) continue;
+
+        // 构造零面积多边形：正向弧 + 反向弧
+        // 多段线 ABC → ABCBA；闭合形状 ABCA → ABCACBA
+        std::vector<ArcType> closedArcs;
+        closedArcs.reserve(n * 2);
+
+        // 正向
+        for (const auto& arc : loop) {
+            closedArcs.push_back(arc);
         }
 
-        // 区域节点（不含填充区域子项）
-        QString areaType = area.isBand() ? "条带" : "可缩";
-        QString areaLabel = QString("区域%1 [%2]")
-            .arg(ai + 1).arg(areaType);
-        auto* areaItem = new QTreeWidgetItem(tree);
-        areaItem->setText(0, areaLabel);
-        areaItem->setData(0, Qt::UserRole, QVariant::fromValue(allIndices));
+        // 反向：从最后一条弧的终点往回走到起点
+        for (int i = static_cast<int>(n) - 1; i >= 0; --i) {
+            const auto& arc = loop[i];
+            PointType p0(arc.Point1().x, arc.Point1().y);
+            PointType p1(arc.Point0().x, arc.Point0().y);
+            double revBulge = -arc.Bulge();
+            closedArcs.push_back(ArcType(p0, p1, revBulge, arc.Data()));
+        }
 
-        // 每个 loop 对应一条 edge polygon（整环，含边界弧段）
-        auto countsIt = m_areaLoopEdgeCounts.find(&area);
-        std::vector<int> loopCounts;
-        if (countsIt != m_areaLoopEdgeCounts.end()) loopCounts = countsIt->second;
+        // 偏置（向外，取距离绝对值）
+        auto offsetResult = tailor_offset::CurveOffseter<ArcType, double>::OffsetClosed(
+            closedArcs, absDist, true);
 
-        if (area.isBand()) {
-            // 条带区域: 上/下边界各融合为一项
-            QVector<int> upperIndices, lowerIndices;
-            int edgeOffset = 0;
-            for (size_t li = 0; li < area.boundary.size(); ++li) {
-                int count = (li < loopCounts.size()) ? loopCounts[li] : 0;
-                QVector<int>& target = area.boundary[li].leftToRight ? lowerIndices : upperIndices;
-                for (int e = 0; e < count && (edgeOffset + e) < (int)edgeIndices.size(); ++e)
-                    target.append(edgeIndices[edgeOffset + e]);
-                edgeOffset += count;
-            }
+        std::vector<ArcType> offsetPoly;
+        for (const auto& resultArc : offsetResult) {
+            offsetPoly.push_back(resultArc);
+        }
 
-            if (!upperIndices.isEmpty()) {
-                auto* item = new QTreeWidgetItem(areaItem);
-                item->setText(0, "上边界");
-                item->setData(0, Qt::UserRole, QVariant::fromValue(upperIndices));
-            }
-            if (!lowerIndices.isEmpty()) {
-                auto* item = new QTreeWidgetItem(areaItem);
-                item->setText(0, "下边界");
-                item->setData(0, Qt::UserRole, QVariant::fromValue(lowerIndices));
-            }
-        } else {
-            // 可缩区域: 所有边界融合为一项
-            if (!edgeIndices.isEmpty()) {
-                auto* item = new QTreeWidgetItem(areaItem);
-                item->setText(0, "边界");
-                item->setData(0, Qt::UserRole, QVariant::fromValue(edgeIndices));
+        if (offsetPoly.empty()) continue;
+
+        // 去自交
+        BooleanOperations boolOp;
+        boolOp.AddSubjectPolygon(offsetPoly);
+        auto deselfAnnotated = boolOp.ExecuteOnlySubjectPatternAnnotated(
+            static_cast<const IFillType*>(nullptr));
+
+        for (auto& poly : deselfAnnotated) {
+            if (!poly.arcs.empty()) {
+                allOffsetBoundaries.push_back(std::move(poly.arcs));
             }
         }
     }
 
-    tree->expandAll();
+    // 转换偏置边界结果为 OffsetResultPolygon（View: 偏置边界 B）
+    QVector<Sketch2DView::OffsetResultPolygon> offsetBoundaryResults;
+
+    // 先叠加原始圆柱区域边界（只描边，不填充）
+    {
+        const QColor kOriginalBoundaryColor(150, 155, 165);
+        for (const auto& loop : boundaryLoops) {
+            size_t m = loop.size();
+            if (m < 2) continue;
+            Sketch2DView::OffsetResultPolygon edgePoly;
+            edgePoly.color = kOriginalBoundaryColor;
+            edgePoly.isHole = false;
+            edgePoly.isOpen = true;
+            for (size_t j = 0; j < m; ++j) {
+                const auto& arc = loop[j];
+                Sketch2DView::PolygonVertex vertex;
+                vertex.point = QPointF(arc.Point0().x, arc.Point0().y);
+                vertex.bulge = arc.Bulge();
+                edgePoly.vertices.append(vertex);
+                edgePoly.edgeSegmentIds.append(arc.Data().segmentId);
+                edgePoly.edgeSourceEdgeIds.append(arc.Data().sourceEdgeId);
+                edgePoly.edgeTags.append(arc.Data().edgeTag);
+                edgePoly.edgeConvexJoinVertices.append(
+                    arc.Data().edgeTag == 1
+                    ? QPointF(arc.Data().convexJoinVertexX, arc.Data().convexJoinVertexY)
+                    : QPointF());
+            }
+            {
+                const auto& lastArc = loop.back();
+                Sketch2DView::PolygonVertex endVertex;
+                endVertex.point = QPointF(lastArc.Point1().x, lastArc.Point1().y);
+                endVertex.bulge = 0.0;
+                edgePoly.vertices.append(endVertex);
+                edgePoly.edgeSegmentIds.append(0);
+                edgePoly.edgeSourceEdgeIds.append(0);
+                edgePoly.edgeTags.append(0);
+                edgePoly.edgeConvexJoinVertices.append(QPointF());
+            }
+            offsetBoundaryResults.append(edgePoly);
+        }
+    }
+
+    {
+        const std::vector<QColor> kOffsetColors = {
+            QColor(80, 180, 240), QColor(60, 160, 220),
+            QColor(100, 200, 255), QColor(120, 180, 230)
+        };
+        for (size_t i = 0; i < allOffsetBoundaries.size(); ++i) {
+            offsetBoundaryResults.append(
+                arcsToPolygon(allOffsetBoundaries[i], kOffsetColors[i % kOffsetColors.size()]));
+        }
+    }
+
+    if (allOffsetBoundaries.empty()) {
+        emit cylindricalOffsetResultReady(offsetBoundaryResults, {}, {});
+        return;
+    }
+
+    // ===== Step 3: 合并所有去自交后的偏置边界 → region B =====
+    std::vector<AnnotatedPolygon> regionB;
+    {
+        BooleanOperations mergeOp;
+        for (auto& arcs : allOffsetBoundaries) {
+            mergeOp.AddSubjectPolygon(arcs);
+        }
+        regionB = mergeOp.ExecuteOnlySubjectPatternAnnotated(
+            static_cast<const IFillType*>(nullptr));
+    }
+
+    std::cout << "[CylOffset] regionB merged: " << regionB.size()
+        << " annotated polygons" << std::endl;
+
+    // ===== Step 3.5: regionB → 周期裁剪到条带 → 再合并 =====
+    std::vector<AnnotatedPolygon> regionB_processed;
+    if (!regionB.empty()) {
+        std::vector<std::vector<ArcType>> regionB_raw;
+        for (auto& poly : regionB) {
+            regionB_raw.push_back(std::move(poly.arcs));
+        }
+        auto clippedB = PeriodicClipper::ClipToStrip(regionB_raw, bLeft, bRight);
+        std::cout << "[CylOffset] regionB after periodic clip: " << clippedB.size()
+            << " polygons" << std::endl;
+        if (!clippedB.empty()) {
+            BooleanOperations mergeOpB;
+            for (auto& arcs : clippedB) {
+                mergeOpB.AddSubjectPolygon(arcs);
+            }
+            regionB_processed = mergeOpB.ExecuteOnlySubjectPatternAnnotated(
+                static_cast<const IFillType*>(nullptr));
+        }
+    }
+
+    std::cout << "[CylOffset] regionB_processed after clip+merge: "
+        << regionB_processed.size() << " annotated polygons" << std::endl;
+
+    // ===== Step 4: C = A ± B_processed（距离 > 0 则并集，< 0 则差集）=====
+    std::vector<std::vector<ArcType>> C_raw;
+    {
+        if (distance > 0) {
+            // A + B: Subject=A, Clip=B_processed
+            BooleanOperations boolOp2;
+            for (auto& poly : m_mergedAnnotated) {
+                boolOp2.AddSubjectPolygon(poly.arcs);
+            }
+            for (auto& polyB : regionB_processed) {
+                boolOp2.AddClipPolygon(polyB.arcs);
+            }
+            C_raw = boolOp2.Execute(BooleanOperation::Union,
+                static_cast<const IFillType*>(nullptr),
+                static_cast<const IFillType*>(nullptr));
+        } else if (distance < 0) {
+            // A - B: Subject=B_processed (偏置区域), Clip=A (原区域)
+            // 因为 B 是向外偏置的膨胀区域，B - A 得到环形扩张带
+            // 后续管线（周期裁剪→合并→圆柱区域）会处理成正确的缩小效果
+            BooleanOperations boolOp2;
+            for (auto& polyB : regionB_processed) {
+                boolOp2.AddSubjectPolygon(polyB.arcs);
+            }
+            for (auto& poly : m_mergedAnnotated) {
+                boolOp2.AddClipPolygon(poly.arcs);
+            }
+            C_raw = boolOp2.Execute(BooleanOperation::Difference,
+                static_cast<const IFillType*>(nullptr),
+                static_cast<const IFillType*>(nullptr));
+        }
+        // distance == 0 → C_raw 为空（保持不变）
+    }
+
+    std::cout << "[CylOffset] Boolean result (C): " << C_raw.size()
+        << " polygons (A " << (distance > 0 ? "+" : (distance < 0 ? "-" : "="))
+        << " B)" << std::endl;
+
+    // 转换布尔结果为 OffsetResultPolygon（View: A±B）
+    QVector<Sketch2DView::OffsetResultPolygon> booleanResults;
+
+    // 先叠加原始圆柱区域边界（只描边，不填充）
+    {
+        const QColor kOriginalBoundaryColor(150, 155, 165);
+        for (const auto& loop : boundaryLoops) {
+            size_t m = loop.size();
+            if (m < 2) continue;
+            Sketch2DView::OffsetResultPolygon edgePoly;
+            edgePoly.color = kOriginalBoundaryColor;
+            edgePoly.isHole = false;
+            edgePoly.isOpen = true;
+            for (size_t j = 0; j < m; ++j) {
+                const auto& arc = loop[j];
+                Sketch2DView::PolygonVertex vertex;
+                vertex.point = QPointF(arc.Point0().x, arc.Point0().y);
+                vertex.bulge = arc.Bulge();
+                edgePoly.vertices.append(vertex);
+                edgePoly.edgeSegmentIds.append(arc.Data().segmentId);
+                edgePoly.edgeSourceEdgeIds.append(arc.Data().sourceEdgeId);
+                edgePoly.edgeTags.append(arc.Data().edgeTag);
+                edgePoly.edgeConvexJoinVertices.append(
+                    arc.Data().edgeTag == 1
+                    ? QPointF(arc.Data().convexJoinVertexX, arc.Data().convexJoinVertexY)
+                    : QPointF());
+            }
+            {
+                const auto& lastArc = loop.back();
+                Sketch2DView::PolygonVertex endVertex;
+                endVertex.point = QPointF(lastArc.Point1().x, lastArc.Point1().y);
+                endVertex.bulge = 0.0;
+                edgePoly.vertices.append(endVertex);
+                edgePoly.edgeSegmentIds.append(0);
+                edgePoly.edgeSourceEdgeIds.append(0);
+                edgePoly.edgeTags.append(0);
+                edgePoly.edgeConvexJoinVertices.append(QPointF());
+            }
+            booleanResults.append(edgePoly);
+        }
+    }
+
+    {
+        const std::vector<QColor> kBoolColors = {
+            QColor(255, 200, 60), QColor(240, 180, 40),
+            QColor(230, 160, 30), QColor(220, 140, 20)
+        };
+        for (size_t i = 0; i < C_raw.size(); ++i) {
+            booleanResults.append(
+                arcsToPolygon(C_raw[i], kBoolColors[i % kBoolColors.size()]));
+        }
+    }
+
+    // ===== Step 5: C_raw → 周期裁剪 → 合并 → 圆柱区域 =====
+    QVector<Sketch2DView::OffsetResultPolygon> finalResults;
+    if (!C_raw.empty()) {
+        auto clipped = PeriodicClipper::ClipToStrip(C_raw, bLeft, bRight);
+
+        std::vector<AnnotatedPolygon> finalAnnotated;
+        if (!clipped.empty()) {
+            BooleanOperations mergeOp3;
+            for (auto& arcs : clipped) {
+                mergeOp3.AddSubjectPolygon(arcs);
+            }
+            finalAnnotated = mergeOp3.ExecuteOnlySubjectPatternAnnotated(
+                static_cast<const IFillType*>(nullptr));
+        }
+
+        if (!finalAnnotated.empty()) {
+            m_offsetCylindricalAreaTree =
+                BuildCylindricalAreas(finalAnnotated, bLeft, bRight);
+
+            m_offsetResultFillCount = static_cast<int>(finalAnnotated.size());
+            m_offsetHighlightIndices.clear();
+            m_offsetLoopEdgeCounts.clear();
+
+            // 填充区域
+            const std::vector<QColor> kFinalFillColors = {
+                QColor(140, 220, 90), QColor(120, 200, 70),
+                QColor(160, 240, 110), QColor(100, 180, 50)
+            };
+            for (size_t i = 0; i < finalAnnotated.size(); ++i) {
+                finalResults.append(
+                    arcsToPolygon(finalAnnotated[i].arcs,
+                        kFinalFillColors[i % kFinalFillColors.size()]));
+            }
+
+            // ---- 填充多边形与区域指纹匹配 ----
+            auto offsetArcFp = [](const std::vector<tailor_visualization::Arc>& arcs)
+                -> std::set<int> {
+                std::set<int> fp;
+                for (const auto& arc : arcs) {
+                    int sid = arc.Data().sourceEdgeId;
+                    if (sid != 0) fp.insert(sid);
+                }
+                return fp;
+            };
+            auto offsetCollectFp = [&](const CylindricalArea& area) -> std::set<int> {
+                std::set<int> ids;
+                std::function<void(const CylindricalArea&)> go =
+                    [&](const CylindricalArea& a) {
+                    for (const auto& loop : a.boundary) {
+                        for (const auto& arc : loop.arcs) {
+                            int sid = arc.Data().sourceEdgeId;
+                            if (sid != 0) ids.insert(sid);
+                        }
+                    }
+                    for (const auto& child : a.children) go(child);
+                };
+                go(area);
+                return ids;
+            };
+
+            // 顶层区域指纹→颜色→地址映射
+            int offColorIdx = 0;
+            const std::vector<QColor> kOffAreaColors = {
+                QColor(100, 170, 60), QColor(80, 130, 40),
+                QColor(120, 190, 80), QColor(60, 100, 30)
+            };
+            std::map<std::set<int>, QColor> offFpColorMap;
+            std::map<std::set<int>, const CylindricalArea*> offFpToArea;
+            for (const auto& area : m_offsetCylindricalAreaTree) {
+                auto fp = offsetCollectFp(area);
+                if (offFpColorMap.find(fp) == offFpColorMap.end()) {
+                    offFpColorMap[fp] =
+                        kOffAreaColors[offColorIdx++ % kOffAreaColors.size()];
+                    offFpToArea[fp] = &area;
+                }
+            }
+
+            // 匹配每个填充多边形到区域
+            std::vector<const CylindricalArea*> offPolyToArea(
+                finalAnnotated.size(), nullptr);
+            for (size_t pi = 0; pi < finalAnnotated.size(); ++pi) {
+                auto pFp = offsetArcFp(finalAnnotated[pi].arcs);
+                size_t bestOverlap = 0;
+                for (const auto& [aFp, aColor] : offFpColorMap) {
+                    size_t overlap = 0;
+                    for (int id : pFp) {
+                        if (aFp.count(id)) ++overlap;
+                    }
+                    if (overlap > bestOverlap) {
+                        bestOverlap = overlap;
+                        offPolyToArea[pi] = offFpToArea[aFp];
+                    }
+                }
+            }
+
+            // 将填充索引记录到对应区域
+            for (size_t pi = 0; pi < finalAnnotated.size(); ++pi) {
+                if (offPolyToArea[pi]) {
+                    m_offsetHighlightIndices[offPolyToArea[pi]].prepend(
+                        static_cast<int>(pi));
+                }
+            }
+
+            // 边界描边：从圆柱区域树提取，同时追踪高亮索引
+            std::function<void(const std::vector<CylindricalArea>&, int)> renderEdges;
+            renderEdges = [&](const std::vector<CylindricalArea>& areas, int depth) {
+                for (const auto& area : areas) {
+                    auto areaFp = offsetCollectFp(area);
+                    auto colorIt = offFpColorMap.find(areaFp);
+                    QColor areaColor = (colorIt != offFpColorMap.end())
+                        ? colorIt->second : kOffAreaColors[0];
+
+                    QVector<int>& areaHighlights =
+                        m_offsetHighlightIndices[&area]; // auto-create
+                    std::vector<int>& loopEdgeCounts =
+                        m_offsetLoopEdgeCounts[&area];   // auto-create
+
+                    for (const auto& loop : area.boundary) {
+                        if (loop.arcs.empty()) {
+                            loopEdgeCounts.push_back(0);
+                            continue;
+                        }
+
+                        loopEdgeCounts.push_back(1);
+                        int edgeIdx = static_cast<int>(finalResults.size());
+                        areaHighlights.append(edgeIdx);
+
+                        Sketch2DView::OffsetResultPolygon edgePoly;
+                        edgePoly.color = areaColor.darker(120);
+                        edgePoly.isHole = (depth % 2 == 1);
+                        edgePoly.isOpen = true;
+
+                        for (const auto& arc : loop.arcs) {
+                            Sketch2DView::PolygonVertex vertex;
+                            vertex.point = QPointF(arc.Point0().x, arc.Point0().y);
+                            vertex.bulge = arc.Bulge();
+                            edgePoly.vertices.append(vertex);
+                            edgePoly.edgeSegmentIds.append(arc.Data().segmentId);
+                            edgePoly.edgeSourceEdgeIds.append(arc.Data().sourceEdgeId);
+                            edgePoly.edgeTags.append(arc.Data().edgeTag);
+                            edgePoly.edgeConvexJoinVertices.append(
+                                arc.Data().edgeTag == 1
+                                ? QPointF(arc.Data().convexJoinVertexX,
+                                    arc.Data().convexJoinVertexY)
+                                : QPointF());
+                        }
+                        {
+                            int n0 = static_cast<int>(loop.arcs.size());
+                            const auto& lastArc = loop.arcs[n0 - 1];
+                            Sketch2DView::PolygonVertex endVertex;
+                            endVertex.point = QPointF(
+                                lastArc.Point1().x, lastArc.Point1().y);
+                            endVertex.bulge = 0.0;
+                            edgePoly.vertices.append(endVertex);
+                            edgePoly.edgeSegmentIds.append(0);
+                            edgePoly.edgeSourceEdgeIds.append(0);
+                            edgePoly.edgeTags.append(0);
+                            edgePoly.edgeConvexJoinVertices.append(QPointF());
+                        }
+                        finalResults.append(std::move(edgePoly));
+                    }
+                    renderEdges(area.children, depth + 1);
+                }
+            };
+            renderEdges(m_offsetCylindricalAreaTree, 0);
+        } else {
+            m_offsetCylindricalAreaTree.clear();
+            m_offsetResultFillCount = 0;
+            m_offsetHighlightIndices.clear();
+            m_offsetLoopEdgeCounts.clear();
+        }
+    }
+
+    std::cout << "[CylOffset] Final: " << finalResults.size()
+        << " entries" << std::endl;
+
+    emit cylindricalOffsetResultReady(
+        offsetBoundaryResults, booleanResults, finalResults);
+    emit regionTreeUpdated();
 }

@@ -167,6 +167,45 @@ void Cylinder3DView::clearMergedPolygons() {
     update();
 }
 
+void Cylinder3DView::setOffsetBoundaryPolygons(
+    const std::vector<Polygon2D>& polygons) {
+    // Only keep open (boundary) polygons; ignore filled regions
+    m_offsetBoundaryPolygons.clear();
+    m_offsetBoundarySourceIndices.clear();
+    for (size_t i = 0; i < polygons.size(); ++i) {
+        if (polygons[i].isOpen) {
+            m_offsetBoundaryPolygons.push_back(polygons[i]);
+            m_offsetBoundarySourceIndices.push_back(static_cast<int>(i));
+        }
+    }
+    m_hasOffsetBoundaries = !m_offsetBoundaryPolygons.empty();
+
+    // Regenerate texture to overlay boundaries on top of base regions
+    if (isValid()) {
+        makeCurrent();
+        if (m_hasMergedPolygons) {
+            generatePolygonTexture();
+        }
+        doneCurrent();
+        update();
+    }
+}
+
+void Cylinder3DView::clearOffsetBoundaryPolygons() {
+    m_offsetBoundaryPolygons.clear();
+    m_offsetBoundarySourceIndices.clear();
+    m_hasOffsetBoundaries = false;
+
+    if (isValid()) {
+        makeCurrent();
+        if (m_hasMergedPolygons) {
+            generatePolygonTexture();
+        }
+        doneCurrent();
+        update();
+    }
+}
+
 void Cylinder3DView::setHighlightedEdgeIndices(const QSet<int>& indices) {
     m_highlightedEdgeIndices = indices;
     if (isValid() && m_hasMergedPolygons) {
@@ -179,6 +218,26 @@ void Cylinder3DView::setHighlightedEdgeIndices(const QSet<int>& indices) {
 
 void Cylinder3DView::clearHighlightedEdgeIndices() {
     m_highlightedEdgeIndices.clear();
+    if (isValid() && m_hasMergedPolygons) {
+        makeCurrent();
+        generatePolygonTexture();
+        doneCurrent();
+        update();
+    }
+}
+
+void Cylinder3DView::setHighlightedOffsetBoundaryIndices(const QSet<int>& indices) {
+    m_highlightedOffsetBoundaryIndices = indices;
+    if (isValid() && m_hasMergedPolygons) {
+        makeCurrent();
+        generatePolygonTexture();
+        doneCurrent();
+        update();
+    }
+}
+
+void Cylinder3DView::clearHighlightedOffsetBoundaryIndices() {
+    m_highlightedOffsetBoundaryIndices.clear();
     if (isValid() && m_hasMergedPolygons) {
         makeCurrent();
         generatePolygonTexture();
@@ -693,6 +752,56 @@ void Cylinder3DView::generatePolygonTexture() {
             }
         }
     }
+
+    // 第三遍：绘制偏置区域边界叠加（在填充上方只描边，不填充）
+    if (m_hasOffsetBoundaries) {
+        // 辅助：逐段边描边（与高亮边绘制逻辑一致）
+        auto drawOffsetEdge = [&](const Vertex2D& dv0, const Vertex2D& dv1,
+                                  const QColor& color, float lineWidth,
+                                  float glowAlpha, float glowWidth) {
+            auto pts = tessellateArc(dv0, dv1);
+
+            QPainterPath edgePath;
+            for (size_t pi = 0; pi < pts.size(); ++pi) {
+                QPointF tp = worldToPixel(pts[pi].x(), pts[pi].y() + yOffset);
+                if (pi == 0) edgePath.moveTo(tp);
+                else edgePath.lineTo(tp);
+            }
+
+            // 外层光晕
+            QColor glow(color);
+            glow.setAlpha(static_cast<int>(glowAlpha));
+            painter.setPen(QPen(glow, glowWidth));
+            painter.drawPath(edgePath);
+            // 核心线
+            painter.setPen(QPen(color, lineWidth));
+            painter.drawPath(edgePath);
+        };
+
+        for (size_t pi = 0; pi < m_offsetBoundaryPolygons.size(); ++pi) {
+            const auto& poly = m_offsetBoundaryPolygons[pi];
+            if (poly.vertices.size() < 2) continue;
+
+            // 判断当前边界是否被高亮选中
+            bool isHl = (pi < m_offsetBoundarySourceIndices.size())
+                && m_highlightedOffsetBoundaryIndices.contains(
+                    m_offsetBoundarySourceIndices[pi]);
+
+            QColor offsetColor = isHl
+                ? QColor(255, 80, 80)    // 高亮：亮红色
+                : QColor(255, 185, 30);   // 默认：橙黄色
+
+            int n = static_cast<int>(poly.vertices.size());
+            for (int j = 0; j < n - 1; ++j) {
+                drawOffsetEdge(poly.vertices[j], poly.vertices[j + 1],
+                    offsetColor,
+                    isHl ? 4.5f : 3.0f,
+                    isHl ? 120.0f : 60.0f,
+                    isHl ? 30.0f : 20.0f);
+            }
+        }
+    }
+
     painter.end();
 
     // 创建/更新 OpenGL 纹理

@@ -20,6 +20,7 @@
 #include "FourViewContainer.h"
 #include "Cylinder3DView.h"
 #include "PeriodicClippingViews.h"
+#include "CylindricalOffsetViews.h"
 #include "PolygonIO.h"
 
 #include <QTabWidget>
@@ -81,9 +82,13 @@ int main(int argc, char* argv[]) {
     // Tab 1: 流水线四视图
     tabWidget->addTab(viewContainer, "流水线 (1-2)");
 
-    // Tab 2: 周期裁剪视图 (视图 6 & 7)
+    // Tab 2: 周期裁剪视图 (视图 6, 7, 8)
     auto* periodicViews = new PeriodicClippingViews(tabWidget);
-    tabWidget->addTab(periodicViews, "周期裁剪 (6-7)");
+    tabWidget->addTab(periodicViews, "周期裁剪 (6-8)");
+
+    // Tab 3: 圆柱偏置视图 (视图 9, 10, 11)
+    auto* offsetViews = new CylindricalOffsetViews(tabWidget);
+    tabWidget->addTab(offsetViews, "圆柱偏置 (9-11)");
 
     rightSplitter->addWidget(tabWidget);
 
@@ -138,25 +143,87 @@ int main(int argc, char* argv[]) {
                          periodicViews->setBoundaryLines(left, right);
                      });
 
+    // 连接：边界线同步到圆柱偏置视图
+    QObject::connect(viewContainer, &FourViewContainer::boundariesUpdated,
+                     offsetViews, [offsetViews](float left, float right) {
+                         offsetViews->setBoundaryLines(left, right);
+                     });
+
+    // 连接：圆柱偏置距离变更 → 触发偏置流水线
+    QObject::connect(offsetViews, &CylindricalOffsetViews::offsetDistanceChanged,
+                     viewContainer, &FourViewContainer::processCylindricalOffset);
+
+    // 连接：圆柱偏置结果 → 更新偏置视图 + 3D 圆柱面
+    QObject::connect(viewContainer, &FourViewContainer::cylindricalOffsetResultReady,
+                     offsetViews, [offsetViews, cylinder3DView](
+                         const QVector<Sketch2DView::OffsetResultPolygon>& boundaries,
+                         const QVector<Sketch2DView::OffsetResultPolygon>& booleanRst,
+                         const QVector<Sketch2DView::OffsetResultPolygon>& finalRst) {
+                         // View 9, 10, 11 展示偏置流水线结果
+                         offsetViews->setOffsetBoundaryResults(boundaries);
+                         offsetViews->setBooleanResults(booleanRst);
+                         offsetViews->setFinalResults(finalRst);
+
+                         // 将偏置后的圆柱区域边界叠加到 3D 圆柱面（不覆盖源区域填充）
+                         std::vector<Cylinder3DView::Polygon2D> offsetPolys;
+                         for (const auto& poly : finalRst) {
+                             Cylinder3DView::Polygon2D mp;
+                             mp.color = poly.color;
+                             mp.isOpen = poly.isOpen;
+                             for (const auto& v : poly.vertices) {
+                                 Cylinder3DView::Vertex2D pv;
+                                 pv.point = v.point;
+                                 pv.bulge = v.bulge;
+                                 mp.vertices.push_back(pv);
+                             }
+                             offsetPolys.push_back(mp);
+                         }
+                         cylinder3DView->setOffsetBoundaryPolygons(offsetPolys);
+                     });
+
+    // 连接：周期裁剪结果变更时，同步触发圆柱偏置（如果有偏置距离）
+    QObject::connect(viewContainer, &FourViewContainer::periodicCylindricalResultReady,
+                     offsetViews, [viewContainer, offsetViews](
+                         const QVector<Sketch2DView::OffsetResultPolygon>&) {
+                         // 周期裁剪结果更新后，重新计算圆柱偏置
+                         viewContainer->processCylindricalOffset(
+                             offsetViews->offsetDistance());
+                     });
+
     // 连接：区域树更新 → 刷新左侧区域结果模型树
     QObject::connect(viewContainer, &FourViewContainer::regionTreeUpdated,
                      [viewContainer, regionResultTree]() {
                          viewContainer->buildRegionTree(regionResultTree);
                      });
 
-    // 连接：区域结果树选中 → 高亮 View 8 对应多边形和边缘
-    //       同时高亮圆柱 3D 视图上的对应边
+    // 连接：区域结果树选中 → 按归属分别高亮原始/偏置区域
     QObject::connect(regionResultTree, &QTreeWidget::itemSelectionChanged,
                      [regionResultTree, periodicViews, cylinder3DView]() {
-                         QSet<int> indices;
+                         QSet<int> origIndices;
+                         QSet<int> offsetIndices;
                          for (auto* item : regionResultTree->selectedItems()) {
+                             // 判断该节点属于"原始区域"还是"偏置区域"
+                             bool isOffset = false;
+                             QTreeWidgetItem* ancestor = item->parent();
+                             while (ancestor) {
+                                 // 顶层标题节点不可选中，用它来判定归属
+                                 if (!ancestor->flags().testFlag(Qt::ItemIsSelectable)) {
+                                     if (ancestor->text(0) == QStringLiteral("\u504f\u7f6e\u533a\u57df"))
+                                         isOffset = true;
+                                     break;
+                                 }
+                                 ancestor = ancestor->parent();
+                             }
+
                              QVector<int> idxList = item->data(0, Qt::UserRole).value<QVector<int>>();
+                             auto& dst = isOffset ? offsetIndices : origIndices;
                              for (int idx : idxList) {
-                                 if (idx >= 0) indices.insert(idx);
+                                 if (idx >= 0) dst.insert(idx);
                              }
                          }
-                         periodicViews->mergedView()->setHighlightedFillResultIndices(indices);
-                         cylinder3DView->setHighlightedEdgeIndices(indices);
+                         periodicViews->mergedView()->setHighlightedFillResultIndices(origIndices);
+                         cylinder3DView->setHighlightedEdgeIndices(origIndices);
+                         cylinder3DView->setHighlightedOffsetBoundaryIndices(offsetIndices);
                      });
 
     rightSplitter->setStretchFactor(0, 2);  // 四视图占更多空间

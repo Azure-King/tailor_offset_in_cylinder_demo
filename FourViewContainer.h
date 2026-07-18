@@ -52,10 +52,21 @@ signals:
         const QVector<Sketch2DView::OffsetResultPolygon>& cylindrical);
     // 区域树已构建（用于左侧面板刷新区域结果树）
     void regionTreeUpdated();
+    // 圆柱偏置结果
+    // offsetBoundaries: 偏置后的边界（去自交后，B）
+    // booleanResult: A±B 布尔运算结果（C）
+    // finalResult: C 经过周期裁剪→合并→圆柱区域后的最终结果
+    void cylindricalOffsetResultReady(
+        const QVector<Sketch2DView::OffsetResultPolygon>& offsetBoundaries,
+        const QVector<Sketch2DView::OffsetResultPolygon>& booleanResult,
+        const QVector<Sketch2DView::OffsetResultPolygon>& finalResult);
 
 public slots:
     /// 刷新周期裁剪（用于边界线变更后重新裁剪）
     void refreshPeriodicClip();
+
+    /// 圆柱偏置流水线（从 View 7/8 结果出发）
+    void processCylindricalOffset(double distance);
 
 private slots:
     void runFullPipeline();
@@ -72,6 +83,8 @@ private:
     // 流水线中间数据：存储弧段结果以便在步骤间传递
     std::vector<std::vector<tailor_visualization::Arc>> m_mergedFillArcs;   // 自交处理+合并后的弧段
     std::vector<bool> m_mergedFillIsHole;    // 与 m_mergedFillArcs 一一对应，标记是否为内环（depth%2==1）
+    // View 7 的并集结果（AnnotatedPolygon 保留 isOuter/edgeTypes，供圆柱偏置使用）
+    std::vector<tailor_visualization::AnnotatedPolygon> m_mergedAnnotated;
 
     // 本地 segmentId → 原始输入边 ID 的映射，用于第一视图高亮溯源
     QHash<int, int> m_localToOriginalSegId;
@@ -96,4 +109,16 @@ private:
 
     // cylindricalResults 中填充多边形的数量（前面 N 项是填充，后续是边缘描边）
     int m_cylindricalResultFillCount = 0;
+
+    // ---- 偏置后的圆柱区域树（供模型树独立展示）----
+    std::vector<tailor_visualization::CylindricalArea> m_offsetCylindricalAreaTree;
+
+    // 偏置区域 → finalResults 高亮索引映射
+    std::map<const tailor_visualization::CylindricalArea*, QVector<int>> m_offsetHighlightIndices;
+
+    // 偏置区域每个 loop 的边索引数量
+    std::map<const tailor_visualization::CylindricalArea*, std::vector<int>> m_offsetLoopEdgeCounts;
+
+    // finalResults 中填充多边形的数量
+    int m_offsetResultFillCount = 0;
 };

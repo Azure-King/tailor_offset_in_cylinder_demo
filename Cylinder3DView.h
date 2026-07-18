@@ -44,9 +44,17 @@ public:
     void setMergedPolygons(const std::vector<Polygon2D>& polygons);
     void clearMergedPolygons();
 
+    /// 设置偏置后的圆柱区域边界叠加显示（在源区域之上只描边）
+    void setOffsetBoundaryPolygons(const std::vector<Polygon2D>& polygons);
+    void clearOffsetBoundaryPolygons();
+
     /// 设置高亮边索引（对应 m_mergedPolygons 中的多边形，其轮廓将被高亮绘制）
     void setHighlightedEdgeIndices(const QSet<int>& indices);
     void clearHighlightedEdgeIndices();
+
+    /// 设置偏置边界高亮索引（对应 m_offsetBoundaryPolygons 中的多边形）
+    void setHighlightedOffsetBoundaryIndices(const QSet<int>& indices);
+    void clearHighlightedOffsetBoundaryIndices();
 
 protected:
     void initializeGL() override;
@@ -101,8 +109,17 @@ private:
     bool m_hasMergedPolygons = false;
     float m_polygonYOffset = 0.0f;  // Y offset to center polygons on cylinder
 
+    // Offset boundary data (from View 11, overlay on top of merged polygons)
+    std::vector<Polygon2D> m_offsetBoundaryPolygons;
+    bool m_hasOffsetBoundaries = false;
+    // 每项 m_offsetBoundaryPolygons[i] 在 finalResults 中的全局索引
+    std::vector<int> m_offsetBoundarySourceIndices;
+
     // Highlighted edge indices (for tree node selection)
     QSet<int> m_highlightedEdgeIndices;
+
+    // Highlighted offset boundary indices (for offset tree node selection)
+    QSet<int> m_highlightedOffsetBoundaryIndices;
 
     // Camera state
     float m_rotationX = 30.0f;   // pitch (degrees), looking down

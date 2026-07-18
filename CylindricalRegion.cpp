@@ -522,29 +522,8 @@ std::vector<CylindricalArea> BuildCylindricalAreas(
     }
 
     if (allGroups.empty()) {
-        // 没有边界多边形 → 只需要构建嵌套树
-        std::vector<CylindricalArea> result;
-        std::sort(contractibleAreas.begin(), contractibleAreas.end(),
-            [](const CylindricalArea& a, const CylindricalArea& b) {
-                double aArea = contractibleAreaSize(a);
-                double bArea = contractibleAreaSize(b);
-                return aArea > bArea;
-            });
-        std::vector<bool> assigned(contractibleAreas.size(), false);
-        for (size_t i = 0; i < contractibleAreas.size(); ++i) {
-            if (assigned[i]) continue;
-            for (size_t j = i + 1; j < contractibleAreas.size(); ++j) {
-                if (assigned[j]) continue;
-                if (contractibleInsideContractible(contractibleAreas[j],
-                    contractibleAreas[i], boundaryLeft, boundaryRight, eps)) {
-                    contractibleAreas[i].children.push_back(
-                        std::move(contractibleAreas[j]));
-                    assigned[j] = true;
-                }
-            }
-            result.push_back(std::move(contractibleAreas[i]));
-        }
-        return result;
+        // 没有边界多边形 → 所有 contractible 区域平铺返回
+        return contractibleAreas;
     }
 
     // ====================================================================
@@ -705,96 +684,22 @@ std::vector<CylindricalArea> BuildCylindricalAreas(
                 area.boundary.push_back(std::move(loop));
         }
 
-        // 检查该 band 是否包含 contractible area，将其嵌套为子区域
-        for (size_t ci = 0; ci < contractibleAreas.size(); ++ci) {
-            if (!contractibleAreas[ci].isContractibleArea()) continue;
-            if (contractibleInsideBand(contractibleAreas[ci], area,
-                                       boundaryLeft, boundaryRight, eps)) {
-                area.children.push_back(std::move(contractibleAreas[ci]));
-                contractibleAreas[ci].boundary.clear(); // 标记已分配
-            }
-        }
-
         bandAreas.push_back(std::move(area));
     }
 
-    // 清理已被分配到 band 内的 contractible areas
-    contractibleAreas.erase(
-        std::remove_if(contractibleAreas.begin(), contractibleAreas.end(),
-            [](const CylindricalArea& a) { return !a.isValid(); }),
-        contractibleAreas.end());
-
     // ====================================================================
-    // Step 5: 构建最终嵌套树
+    // Step 5: 所有区域平铺返回（不计算嵌套关系）
     // ====================================================================
     std::vector<CylindricalArea> result;
 
-    // 5a: 未被 band 包含的 contractible → 顶层
+    // 剩余未被 band 包含的 contractible → 顶层
     for (auto& ca : contractibleAreas) {
         if (!ca.isValid()) continue;
         result.push_back(std::move(ca));
     }
 
-    // 5b: 顶层 contractible 相互嵌套
-    if (result.size() > 1) {
-        std::sort(result.begin(), result.end(),
-            [](const CylindricalArea& a, const CylindricalArea& b) {
-                double aArea = contractibleAreaSize(a);
-                double bArea = contractibleAreaSize(b);
-                return aArea > bArea;
-            });
-
-        std::vector<bool> assigned(result.size(), false);
-        std::vector<CylindricalArea> nested;
-
-        for (size_t i = 0; i < result.size(); ++i) {
-            if (assigned[i]) continue;
-            if (!result[i].isContractibleArea()) {
-                nested.push_back(std::move(result[i]));
-                continue;
-            }
-            for (size_t j = i + 1; j < result.size(); ++j) {
-                if (assigned[j]) continue;
-                if (!result[j].isContractibleArea()) continue;
-                if (contractibleInsideContractible(result[j], result[i],
-                                                   boundaryLeft, boundaryRight, eps)) {
-                    result[i].children.push_back(std::move(result[j]));
-                    assigned[j] = true;
-                }
-            }
-            nested.push_back(std::move(result[i]));
-        }
-        result = std::move(nested);
-    }
-
-    // 5c: band 内部 children 嵌套 + 加入最终结果
+    // 所有 band 区域
     for (auto& ba : bandAreas) {
-        if (ba.children.size() > 1) {
-            std::sort(ba.children.begin(), ba.children.end(),
-                [](const CylindricalArea& a, const CylindricalArea& b) {
-                    double aArea = contractibleAreaSize(a);
-                    double bArea = contractibleAreaSize(b);
-                    return aArea > bArea;
-                });
-
-            std::vector<bool> childAssigned(ba.children.size(), false);
-            std::vector<CylindricalArea> nestedChildren;
-
-            for (size_t i = 0; i < ba.children.size(); ++i) {
-                if (childAssigned[i]) continue;
-                for (size_t j = i + 1; j < ba.children.size(); ++j) {
-                    if (childAssigned[j]) continue;
-                    if (contractibleInsideContractible(ba.children[j], ba.children[i],
-                                                       boundaryLeft, boundaryRight, eps)) {
-                        ba.children[i].children.push_back(std::move(ba.children[j]));
-                        childAssigned[j] = true;
-                    }
-                }
-                nestedChildren.push_back(std::move(ba.children[i]));
-            }
-            ba.children = std::move(nestedChildren);
-        }
-
         result.push_back(std::move(ba));
     }
 
