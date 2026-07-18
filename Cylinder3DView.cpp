@@ -12,7 +12,7 @@
 #endif
 
 Cylinder3DView::Cylinder3DView(QWidget* parent)
-    : QOpenGLWidget(parent), m_targetCenter(0.0f, 0.0f) {
+    : QOpenGLWidget(parent), m_targetCenter(0.0f, 0.0f, 0.0f) {
     setMinimumSize(300, 200);
     setMouseTracking(false);
 }
@@ -727,13 +727,14 @@ void Cylinder3DView::paintGL() {
     float rx = m_rotationX * static_cast<float>(M_PI) / 180.0f;
     float ry = m_rotationY * static_cast<float>(M_PI) / 180.0f;
 
-    QVector3D eye(
+    // 相机绕 m_targetCenter 轨道运动，缩放/平移互不干扰
+    QVector3D orbitOffset(
         m_distance * std::cos(rx) * std::sin(ry),
         m_distance * std::sin(rx),
         m_distance * std::cos(rx) * std::cos(ry)
     );
-
-    QVector3D center(m_targetCenter.x(), 0.0f, m_targetCenter.y());
+    QVector3D eye = QVector3D(m_targetCenter) + orbitOffset;
+    QVector3D center(m_targetCenter);
     QVector3D up(0.0f, 1.0f, 0.0f);
 
     m_view.setToIdentity();
@@ -855,20 +856,30 @@ void Cylinder3DView::mouseMoveEvent(QMouseEvent* event) {
         update();
         event->accept();
     } else if (m_isPanning) {
-        // 中键平移：沿屏幕 XY 方向移动目标中心点
+        // 中键平移：
+        //   水平 (delta.x) → 沿相机右方向在 XZ 平面移动
+        //   垂直 (delta.y) → 沿 Y 轴上下移动（拖上→场景上移→看下方）
         float rx = m_rotationX * static_cast<float>(M_PI) / 180.0f;
         float ry = m_rotationY * static_cast<float>(M_PI) / 180.0f;
-
-        // 屏幕右方向在世界坐标中的近似方向
-        float viewCosY = std::cos(ry);
-        float viewSinY = std::sin(ry);
-
-        // 平移灵敏度随距离缩放
         float panScale = m_distance * 0.001f;
-        m_targetCenter += QPointF(
-            viewCosY * delta.x() * panScale - viewSinY * delta.y() * panScale,
-            viewSinY * delta.x() * panScale + viewCosY * delta.y() * panScale
+
+        // 计算相机右方向向量（XZ 平面投影），eye 绕 m_targetCenter
+        QVector3D orbitOffset(
+            m_distance * std::cos(rx) * std::sin(ry),
+            m_distance * std::sin(rx),
+            m_distance * std::cos(rx) * std::cos(ry)
         );
+        QVector3D eye = QVector3D(m_targetCenter) + orbitOffset;
+        QVector3D forward = (QVector3D(m_targetCenter) - eye).normalized();
+        QVector3D right = QVector3D::crossProduct(forward, QVector3D(0.0f, 1.0f, 0.0f)).normalized();
+
+        // 水平: delta.x 沿相机右方向
+        float cx = m_targetCenter.x() + right.x() * delta.x() * panScale;
+        float cz = m_targetCenter.z() + right.z() * delta.x() * panScale;
+        // 垂直: delta.y 直接映射到 Y (拖上→Y减→场景上移)
+        float cy = m_targetCenter.y() + delta.y() * panScale;
+
+        m_targetCenter = QVector3D(cx, cy, cz);
 
         update();
         event->accept();

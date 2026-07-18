@@ -108,7 +108,7 @@ private:
     float m_rotationX = 30.0f;   // pitch (degrees), looking down
     float m_rotationY = -45.0f;  // yaw (degrees)
     float m_distance = 500.0f;   // camera distance from origin
-    QPointF m_targetCenter;      // orbit center in world space
+    QVector3D m_targetCenter;    // orbit center in world space (supports vertical pan)
 
     // Mouse interaction
     QPoint m_lastMousePos;
