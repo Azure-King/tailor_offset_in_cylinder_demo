@@ -106,6 +106,7 @@ void Cylinder3DView::setMergedPolygons(
     const std::vector<Polygon2D>& polygons) {
     m_mergedPolygons = polygons;
     m_hasMergedPolygons = !polygons.empty();
+    m_highlightedEdgeIndices.clear();  // 新数据到达时清除旧的高亮
 
     if (!m_hasMergedPolygons) {
         update();
@@ -157,12 +158,33 @@ void Cylinder3DView::setMergedPolygons(
 void Cylinder3DView::clearMergedPolygons() {
     m_mergedPolygons.clear();
     m_hasMergedPolygons = false;
+    m_highlightedEdgeIndices.clear();
 
     if (m_polyTexture) {
         delete m_polyTexture;
         m_polyTexture = nullptr;
     }
     update();
+}
+
+void Cylinder3DView::setHighlightedEdgeIndices(const QSet<int>& indices) {
+    m_highlightedEdgeIndices = indices;
+    if (isValid() && m_hasMergedPolygons) {
+        makeCurrent();
+        generatePolygonTexture();
+        doneCurrent();
+        update();
+    }
+}
+
+void Cylinder3DView::clearHighlightedEdgeIndices() {
+    m_highlightedEdgeIndices.clear();
+    if (isValid() && m_hasMergedPolygons) {
+        makeCurrent();
+        generatePolygonTexture();
+        doneCurrent();
+        update();
+    }
 }
 
 void Cylinder3DView::initializeGL() {
@@ -577,25 +599,18 @@ void Cylinder3DView::generatePolygonTexture() {
     QPainter painter(&img);
     painter.setRenderHint(QPainter::Antialiasing, true);
 
-    for (const auto& poly : m_mergedPolygons) {
+    // Lambda: build QPainterPath for a single polygon
+    auto buildPathForPolygon = [&](const Polygon2D& poly) -> QPainterPath {
         int n = static_cast<int>(poly.vertices.size());
-        if (n < 2) continue;
-
-        // 开放路径（条带边界描边线）不参与填充纹理生成，
-        // 只有闭合多边形才需要渲染到圆柱面上
-        if (poly.isOpen) continue;
-
-        QColor fillColor = poly.color.isValid() ? poly.color : QColor(200, 200, 200);
-        fillColor.setAlpha(220);
-
         QPainterPath path;
+        if (n < 2) return path;
+
         bool firstPoint = true;
         for (int i = 0; i < n; ++i) {
             const auto& v0 = poly.vertices[i];
             int next = (i + 1) % n;
             const auto& v1 = poly.vertices[next];
 
-            // 把世界坐标 (x, y) 映射到纹理坐标：使用 y + yOffset 来匹配圆柱上的位置
             double wy0 = v0.point.y() + yOffset;
             double wy1 = v1.point.y() + yOffset;
 
@@ -603,7 +618,6 @@ void Cylinder3DView::generatePolygonTexture() {
             for (size_t j = 0; j < pts.size(); ++j) {
                 QPointF tp;
                 if (j == 0 && i != 0) {
-                    // 跳过重复的起点（前一段的终点就是当前段的起点）
                     continue;
                 }
                 double py = pts[j].y() + yOffset;
@@ -617,14 +631,72 @@ void Cylinder3DView::generatePolygonTexture() {
             }
         }
         path.closeSubpath();
+        return path;
+    };
+
+    // 第一遍：绘制所有多边形的填充和普通边框
+    for (int idx = 0; idx < (int)m_mergedPolygons.size(); ++idx) {
+        const auto& poly = m_mergedPolygons[idx];
+        if (poly.vertices.size() < 2) continue;
+        if (poly.isOpen) continue;
+
+        QColor fillColor = poly.color.isValid() ? poly.color : QColor(200, 200, 200);
+        fillColor.setAlpha(220);
+
+        QPainterPath path = buildPathForPolygon(poly);
 
         // 填充多边形
         painter.fillPath(path, fillColor);
 
-        // 边框
+        // 普通边框
         QPen pen(Qt::white, 1.5);
         painter.setPen(pen);
         painter.drawPath(path);
+    }
+
+    // 第二遍：对有高亮索引的多边形绘制发光边框（不覆盖填充，只叠加描边）
+    if (!m_highlightedEdgeIndices.empty()) {
+        // 高亮描边辅助：用发光笔绘制一个 QPainterPath
+        auto drawGlow = [&](const QPainterPath& path) {
+            // 外层光晕（半透明宽线）
+            painter.setPen(QPen(QColor(255, 180, 0, 80), 30.0));
+            painter.drawPath(path);
+            // 中层光晕
+            painter.setPen(QPen(QColor(255, 200, 0, 180), 15.0));
+            painter.drawPath(path);
+            // 核心高亮线（不透明，醒目）
+            painter.setPen(QPen(QColor(255, 230, 30, 255), 5.0));
+            painter.drawPath(path);
+        };
+
+        for (int polyIdx : m_highlightedEdgeIndices) {
+            if (polyIdx < 0 || polyIdx >= (int)m_mergedPolygons.size()) continue;
+            const auto& poly = m_mergedPolygons[polyIdx];
+            if (poly.vertices.size() < 2) continue;
+
+            if (poly.isOpen) {
+                // 开放路径：逐段边绘制（避免闭合造成跨条带直线）
+                // 对于 N 个弧段的开放路径，vertices 有 N+1 个顶点
+                int n = static_cast<int>(poly.vertices.size());
+                for (int j = 0; j < n - 1; ++j) {
+                    const auto& v0 = poly.vertices[j];
+                    const auto& v1 = poly.vertices[j + 1];
+                    auto pts = tessellateArc(v0, v1);
+
+                    QPainterPath edgePath;
+                    for (size_t pi = 0; pi < pts.size(); ++pi) {
+                        QPointF tp = worldToPixel(pts[pi].x(), pts[pi].y() + yOffset);
+                        if (pi == 0) edgePath.moveTo(tp);
+                        else edgePath.lineTo(tp);
+                    }
+                    drawGlow(edgePath);
+                }
+            } else {
+                // 闭合路径：绘制完整轮廓
+                QPainterPath path = buildPathForPolygon(poly);
+                drawGlow(path);
+            }
+        }
     }
     painter.end();
 
@@ -636,10 +708,10 @@ void Cylinder3DView::generatePolygonTexture() {
 
     m_polyTexture = new QOpenGLTexture(QOpenGLTexture::Target2D);
     m_polyTexture->setData(img);
-    m_polyTexture->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
+    // 使用 Linear（无 mipmap）避免细线（如高亮边）在远处因 mipmap 平均而消失
+    m_polyTexture->setMinificationFilter(QOpenGLTexture::Linear);
     m_polyTexture->setMagnificationFilter(QOpenGLTexture::Linear);
     m_polyTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
-    m_polyTexture->generateMipMaps();
 }
 
 void Cylinder3DView::resizeGL(int w, int h) {

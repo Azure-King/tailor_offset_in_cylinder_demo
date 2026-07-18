@@ -12,6 +12,7 @@
 #include <QMatrix4x4>
 #include <QColor>
 #include <QPointF>
+#include <QSet>
 #include <vector>
 
 class Cylinder3DView : public QOpenGLWidget, protected QOpenGLFunctions_3_3_Core {
@@ -42,6 +43,10 @@ public:
     /// 设置要贴到圆柱面上的合并多边形数据（来自周期裁剪 View 7）
     void setMergedPolygons(const std::vector<Polygon2D>& polygons);
     void clearMergedPolygons();
+
+    /// 设置高亮边索引（对应 m_mergedPolygons 中的多边形，其轮廓将被高亮绘制）
+    void setHighlightedEdgeIndices(const QSet<int>& indices);
+    void clearHighlightedEdgeIndices();
 
 protected:
     void initializeGL() override;
@@ -95,6 +100,9 @@ private:
     std::vector<Polygon2D> m_mergedPolygons;
     bool m_hasMergedPolygons = false;
     float m_polygonYOffset = 0.0f;  // Y offset to center polygons on cylinder
+
+    // Highlighted edge indices (for tree node selection)
+    QSet<int> m_highlightedEdgeIndices;
 
     // Camera state
     float m_rotationX = 30.0f;   // pitch (degrees), looking down

@@ -156,8 +156,9 @@ int main(int argc, char* argv[]) {
                      });
 
     // 连接：区域结果树选中 → 高亮 View 8 对应多边形和边缘
+    //       同时高亮圆柱 3D 视图上的对应边
     QObject::connect(regionResultTree, &QTreeWidget::itemSelectionChanged,
-                     [regionResultTree, periodicViews]() {
+                     [regionResultTree, periodicViews, cylinder3DView]() {
                          QSet<int> indices;
                          for (auto* item : regionResultTree->selectedItems()) {
                              QVector<int> idxList = item->data(0, Qt::UserRole).value<QVector<int>>();
@@ -166,6 +167,7 @@ int main(int argc, char* argv[]) {
                              }
                          }
                          periodicViews->mergedView()->setHighlightedFillResultIndices(indices);
+                         cylinder3DView->setHighlightedEdgeIndices(indices);
                      });
 
     rightSplitter->setStretchFactor(0, 2);  // 四视图占更多空间
