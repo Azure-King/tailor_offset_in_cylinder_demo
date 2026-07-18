@@ -34,7 +34,7 @@ int main(int argc, char* argv[]) {
     // 创建主水平分割器
     auto* mainSplitter = new QSplitter(Qt::Horizontal, &window);
 
-    // 创建左侧垂直分割器，用于分隔输入和偏置结果模型树
+    // 创建左侧垂直分割器，用于分隔输入和区域结果模型树
     auto* leftSplitter = new QSplitter(Qt::Vertical, mainSplitter);
     leftSplitter->setMinimumWidth(150);
     leftSplitter->setMaximumWidth(300);
@@ -54,26 +54,15 @@ int main(int argc, char* argv[]) {
     polygonsItem->setText(0, "多边形");
     polygonsItem->setExpanded(true);
 
-    // ==================== 偏置结果模型树（下面部分） ====================
-    auto* offsetResultsTree = new QTreeWidget(leftSplitter);
-    offsetResultsTree->setHeaderLabel("偏置结果");
-    offsetResultsTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
-
-    // 偏置结果节点
-    auto* offsetResultsItem = new QTreeWidgetItem(offsetResultsTree);
-    offsetResultsItem->setText(0, "曲线偏置结果");
-    offsetResultsItem->setExpanded(true);
-
-    // ==================== 区域结果模型树（第三部分） ====================
+    // ==================== 区域结果模型树（第二部分） ====================
     auto* regionResultTree = new QTreeWidget(leftSplitter);
     regionResultTree->setHeaderLabel("区域结果");
     regionResultTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
 
-    // 设置左侧分割器的比例（输入在上，偏置结果在中间，区域结果在下）
+    // 设置左侧分割器的比例（输入在上，区域结果在下）
     leftSplitter->setStretchFactor(0, 1);  // 输入模型树
-    leftSplitter->setStretchFactor(1, 1);  // 偏置结果模型树
-    leftSplitter->setStretchFactor(2, 1);  // 区域结果模型树
-    leftSplitter->setSizes({ 150, 150, 150 });
+    leftSplitter->setStretchFactor(1, 1);  // 区域结果模型树
+    leftSplitter->setSizes({ 150, 150 });
 
     // 使用 FourViewContainer 替代单个 Sketch2DView
     auto* viewContainer = new FourViewContainer(&window);
@@ -90,7 +79,7 @@ int main(int argc, char* argv[]) {
     tabWidget->setTabPosition(QTabWidget::North);
 
     // Tab 1: 流水线四视图
-    tabWidget->addTab(viewContainer, "流水线 (1-4)");
+    tabWidget->addTab(viewContainer, "流水线 (1-2)");
 
     // Tab 2: 周期裁剪视图 (视图 6 & 7)
     auto* periodicViews = new PeriodicClippingViews(tabWidget);
@@ -517,70 +506,6 @@ int main(int argc, char* argv[]) {
 
                 if (!polygon.edges.empty()) {
                     polygonsToExport.push_back(polygon);
-                }
-            }
-
-            // 导出到文件
-            if (!polygonsToExport.empty()) {
-                tailor_visualization::PolygonIO::ExportToFile(filePath.toStdString(), polygonsToExport);
-            }
-        }
-        });
-
-    // ==================== 偏置结果模型树右键菜单 ====================
-    offsetResultsTree->setContextMenuPolicy(Qt::CustomContextMenu);
-    QObject::connect(offsetResultsTree, &QTreeWidget::customContextMenuRequested, [offsetResultsTree, viewContainer](const QPoint& pos) {
-        auto selectedItems = offsetResultsTree->selectedItems();
-        if (selectedItems.isEmpty()) {
-            return;
-        }
-
-        // 创建右键菜单
-        QMenu menu;
-        QAction* exportAction = menu.addAction("导出");
-
-        QAction* result = menu.exec(offsetResultsTree->mapToGlobal(pos));
-
-        if (result == exportAction) {
-            // 导出选中的偏置结果多边形到文件
-            QString filePath = QFileDialog::getSaveFileName(nullptr, "导出偏置结果", "", "Polygon Files (*.txt);;All Files (*)");
-            if (filePath.isEmpty()) {
-                return;
-            }
-
-            // 收集需要导出的偏置结果多边形
-            std::vector<tailor_visualization::Polygon> polygonsToExport;
-
-            for (QTreeWidgetItem* item : selectedItems) {
-                if (!item->parent()) {
-                    continue;
-                }
-
-                // 获取偏置结果索引
-                int type = item->data(0, Qt::UserRole).toInt();
-                int index = item->parent()->indexOfChild(item);
-
-                // 获取对应的偏置结果
-                const auto& offsetResults = viewContainer->mainView()->offsetResults();
-                if (index >= 0 && index < offsetResults.size()) {
-                    const auto& resultPoly = offsetResults[index];
-                    tailor_visualization::Polygon polygon;
-                    for (int j = 0; j < resultPoly.vertices.size(); ++j) {
-                        const auto& vertex = resultPoly.vertices[j];
-                        const auto& nextVertex = resultPoly.vertices[(j + 1) % resultPoly.vertices.size()];
-
-                        tailor_visualization::PolygonEdge edge;
-                        edge.startPoint.x = vertex.point.x();
-                        edge.startPoint.y = vertex.point.y();
-                        edge.endPoint.x = nextVertex.point.x();
-                        edge.endPoint.y = nextVertex.point.y();
-                        edge.bulge = 0.0;
-                        polygon.edges.push_back(edge);
-                    }
-
-                    if (!polygon.edges.empty()) {
-                        polygonsToExport.push_back(polygon);
-                    }
                 }
             }
 

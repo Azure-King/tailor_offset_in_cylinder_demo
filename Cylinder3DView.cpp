@@ -545,11 +545,11 @@ void Cylinder3DView::generatePolygonTexture() {
     double yMax =  halfH;
 
     // 纹理尺寸
-    const int texW = 2048;
+    const int texW = 4096;
     double aspect = (xMax - xMin) / std::max(yMax - yMin, 1.0);
     int texH = std::max(4, static_cast<int>(texW / aspect));
     // 限制纹理高度避免过大
-    texH = std::min(texH, 4096);
+    texH = std::min(texH, 8192);
 
     // 世界坐标 → 纹理像素坐标
     // 先居中多边形 X 坐标（使数据中心对齐圆柱中心），再进行水平翻转
@@ -645,13 +645,8 @@ void Cylinder3DView::generatePolygonTexture() {
 
         QPainterPath path = buildPathForPolygon(poly);
 
-        // 填充多边形
+        // 填充多边形（不画边框，避免母线边界处出现白边接缝）
         painter.fillPath(path, fillColor);
-
-        // 普通边框
-        QPen pen(Qt::white, 1.5);
-        painter.setPen(pen);
-        painter.drawPath(path);
     }
 
     // 第二遍：对有高亮索引的多边形绘制发光边框（不覆盖填充，只叠加描边）
@@ -873,9 +868,9 @@ void Cylinder3DView::mouseMoveEvent(QMouseEvent* event) {
         QVector3D forward = (QVector3D(m_targetCenter) - eye).normalized();
         QVector3D right = QVector3D::crossProduct(forward, QVector3D(0.0f, 1.0f, 0.0f)).normalized();
 
-        // 水平: delta.x 沿相机右方向
-        float cx = m_targetCenter.x() + right.x() * delta.x() * panScale;
-        float cz = m_targetCenter.z() + right.z() * delta.x() * panScale;
+        // 水平: -delta.x 沿相机右方向（右拖→场景右移→中心左移，抓取感一致）
+        float cx = m_targetCenter.x() - right.x() * delta.x() * panScale;
+        float cz = m_targetCenter.z() - right.z() * delta.x() * panScale;
         // 垂直: delta.y 直接映射到 Y (拖上→Y减→场景上移)
         float cy = m_targetCenter.y() + delta.y() * panScale;
 
