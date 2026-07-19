@@ -1,8 +1,7 @@
 #include "PeriodicClippingViews.h"
 
 #include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QSplitter>
+#include <QGridLayout>
 #include <QFrame>
 #include <QLabel>
 
@@ -14,17 +13,13 @@ PeriodicClippingViews::PeriodicClippingViews(QWidget* parent)
 
 void PeriodicClippingViews::setupViews()
 {
-    auto* mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(0, 0, 0, 0);
-    mainLayout->setSpacing(0);
+    // === 2x2 网格布局 ===
+    auto* gridLayout = new QGridLayout(this);
+    gridLayout->setContentsMargins(0, 0, 0, 0);
+    gridLayout->setSpacing(2);
 
-    m_vertSplitter = new QSplitter(Qt::Vertical, this);
-
-    // === 上半部分：水平分割器 (View 6 | View 7) ===
-    m_horizSplitter = new QSplitter(Qt::Horizontal, m_vertSplitter);
-
-    // === View 6 — 周期裁剪各分量 ===
-    auto* leftFrame = new QFrame(m_horizSplitter);
+    // === View 6 — 周期裁剪各分量（左上）===
+    auto* leftFrame = new QFrame(this);
     leftFrame->setFrameStyle(QFrame::Box | QFrame::Plain);
     auto* leftLayout = new QVBoxLayout(leftFrame);
     leftLayout->setContentsMargins(0, 0, 0, 0);
@@ -39,8 +34,8 @@ void PeriodicClippingViews::setupViews()
     m_beforeView->setReadOnly(true);
     leftLayout->addWidget(m_beforeView);
 
-    // === View 7 — 周期裁剪并集（简单布尔并集） ===
-    auto* middleFrame = new QFrame(m_horizSplitter);
+    // === View 7 — 周期裁剪并集（简单布尔并集）（右上）===
+    auto* middleFrame = new QFrame(this);
     middleFrame->setFrameStyle(QFrame::Box | QFrame::Plain);
     auto* middleLayout = new QVBoxLayout(middleFrame);
     middleLayout->setContentsMargins(0, 0, 0, 0);
@@ -55,12 +50,8 @@ void PeriodicClippingViews::setupViews()
     m_afterView->setReadOnly(true);
     middleLayout->addWidget(m_afterView);
 
-    m_horizSplitter->addWidget(leftFrame);
-    m_horizSplitter->addWidget(middleFrame);
-    m_horizSplitter->setSizes({500, 500});
-
-    // === View 8 — 圆柱区域合并结果 ===
-    auto* bottomFrame = new QFrame(m_vertSplitter);
+    // === View 8 — 圆柱区域合并结果（左下）===
+    auto* bottomFrame = new QFrame(this);
     bottomFrame->setFrameStyle(QFrame::Box | QFrame::Plain);
     auto* bottomLayout = new QVBoxLayout(bottomFrame);
     bottomLayout->setContentsMargins(0, 0, 0, 0);
@@ -75,11 +66,23 @@ void PeriodicClippingViews::setupViews()
     m_mergedView->setReadOnly(true);
     bottomLayout->addWidget(m_mergedView);
 
-    m_vertSplitter->addWidget(m_horizSplitter);
-    m_vertSplitter->addWidget(bottomFrame);
-    m_vertSplitter->setSizes({300, 300});
+    // === 右下角：3D圆柱视图占位 ===
+    m_cylinderPlaceholder = new QWidget(this);
+    auto* phLayout = new QVBoxLayout(m_cylinderPlaceholder);
+    phLayout->setContentsMargins(0, 0, 0, 0);
+    phLayout->setSpacing(0);
 
-    mainLayout->addWidget(m_vertSplitter);
+    // 添加到 2x2 网格
+    gridLayout->addWidget(leftFrame, 0, 0);
+    gridLayout->addWidget(middleFrame, 0, 1);
+    gridLayout->addWidget(bottomFrame, 1, 0);
+    gridLayout->addWidget(m_cylinderPlaceholder, 1, 1);
+
+    // 行列等分
+    gridLayout->setRowStretch(0, 1);
+    gridLayout->setRowStretch(1, 1);
+    gridLayout->setColumnStretch(0, 1);
+    gridLayout->setColumnStretch(1, 1);
 }
 
 void PeriodicClippingViews::setBeforePolygons(
@@ -141,4 +144,13 @@ void PeriodicClippingViews::setBoundaryLines(float left, float right)
     m_beforeView->setBoundaryLines(left, right);
     m_afterView->setBoundaryLines(left, right);
     m_mergedView->setBoundaryLines(left, right);
+}
+
+void PeriodicClippingViews::setCylinderView(QWidget* view)
+{
+    if (!m_cylinderPlaceholder) return;
+    // 从旧父控件移除（setParent 会自动从旧布局中移除）
+    view->setParent(m_cylinderPlaceholder);
+    m_cylinderPlaceholder->layout()->addWidget(view);
+    view->show();
 }

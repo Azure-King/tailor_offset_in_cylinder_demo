@@ -2,8 +2,8 @@
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QGridLayout>
 #include <QFrame>
-#include <QSplitter>
 #include <QLabel>
 #include <QSlider>
 #include <QString>
@@ -40,52 +40,42 @@ void CylindricalOffsetViews::setupViews() {
         }
     )";
 
-    // ---- 上半部分：水平分割 View 9 和 View 10 ----
-    m_horizSplitter = new QSplitter(Qt::Horizontal, this);
+    // ---- 左上：View 9 — 偏置边界 ----
+    auto* frameLeft = new QFrame(this);
+    frameLeft->setFrameShape(QFrame::StyledPanel);
+    frameLeft->setFrameShadow(QFrame::Sunken);
+    auto* layoutLeft = new QVBoxLayout(frameLeft);
+    layoutLeft->setContentsMargins(0, 0, 0, 0);
+    layoutLeft->addWidget(m_offsetBoundaryView);
 
-    {
-        auto* frameLeft = new QFrame();
-        frameLeft->setFrameShape(QFrame::StyledPanel);
-        frameLeft->setFrameShadow(QFrame::Sunken);
-        auto* layoutLeft = new QVBoxLayout(frameLeft);
-        layoutLeft->setContentsMargins(0, 0, 0, 0);
-        layoutLeft->addWidget(m_offsetBoundaryView);
+    auto* overlayLeft = new QLabel(m_offsetBoundaryView);
+    overlayLeft->setObjectName("overlayPanel");
+    overlayLeft->setStyleSheet(overlayStyle);
+    overlayLeft->setText("  偏置边界 (去自交后, B)  ");
+    overlayLeft->setWordWrap(false);
+    overlayLeft->adjustSize();
+    overlayLeft->move(8, 8);
+    overlayLeft->show();
 
-        // 标题浮层
-        auto* overlayLeft = new QLabel(m_offsetBoundaryView);
-        overlayLeft->setObjectName("overlayPanel");
-        overlayLeft->setStyleSheet(overlayStyle);
-        overlayLeft->setText("  偏置边界 (去自交后, B)  ");
-        overlayLeft->setWordWrap(false);
-        overlayLeft->adjustSize();
-        overlayLeft->move(8, 8);
-        overlayLeft->show();
+    // ---- 右上：View 10 — 布尔运算结果 ----
+    auto* frameRight = new QFrame(this);
+    frameRight->setFrameShape(QFrame::StyledPanel);
+    frameRight->setFrameShadow(QFrame::Sunken);
+    auto* layoutRight = new QVBoxLayout(frameRight);
+    layoutRight->setContentsMargins(0, 0, 0, 0);
+    layoutRight->addWidget(m_booleanResultView);
 
-        m_horizSplitter->addWidget(frameLeft);
-    }
+    auto* overlayRight = new QLabel(m_booleanResultView);
+    overlayRight->setObjectName("overlayPanel");
+    overlayRight->setStyleSheet(overlayStyle);
+    overlayRight->setText("  布尔运算结果 (A \u00b1 B)  ");
+    overlayRight->setWordWrap(false);
+    overlayRight->adjustSize();
+    overlayRight->move(8, 8);
+    overlayRight->show();
 
-    {
-        auto* frameRight = new QFrame();
-        frameRight->setFrameShape(QFrame::StyledPanel);
-        frameRight->setFrameShadow(QFrame::Sunken);
-        auto* layoutRight = new QVBoxLayout(frameRight);
-        layoutRight->setContentsMargins(0, 0, 0, 0);
-        layoutRight->addWidget(m_booleanResultView);
-
-        auto* overlayRight = new QLabel(m_booleanResultView);
-        overlayRight->setObjectName("overlayPanel");
-        overlayRight->setStyleSheet(overlayStyle);
-        overlayRight->setText("  布尔运算结果 (A ± B)  ");
-        overlayRight->setWordWrap(false);
-        overlayRight->adjustSize();
-        overlayRight->move(8, 8);
-        overlayRight->show();
-
-        m_horizSplitter->addWidget(frameRight);
-    }
-
-    // ---- 下半部分：View 11 + 偏置距离滑块 ----
-    auto* frameBottom = new QFrame();
+    // ---- 左下：View 11 — 最终偏置区域 + 滑块 ----
+    auto* frameBottom = new QFrame(this);
     frameBottom->setFrameShape(QFrame::StyledPanel);
     frameBottom->setFrameShadow(QFrame::Sunken);
     auto* layoutBottom = new QVBoxLayout(frameBottom);
@@ -100,7 +90,7 @@ void CylindricalOffsetViews::setupViews() {
     overlayLayout->setContentsMargins(6, 3, 6, 3);
     overlayLayout->setSpacing(4);
 
-    auto* titleLabel = new QLabel("圆柱偏置:", overlayBottom);
+    auto* titleLabel = new QLabel("\u5706\u67f1\u504f\u7f6e:", overlayBottom);
     overlayLayout->addWidget(titleLabel);
 
     m_offsetSlider = new QSlider(Qt::Horizontal, overlayBottom);
@@ -115,7 +105,7 @@ void CylindricalOffsetViews::setupViews() {
     m_offsetValueLabel->setStyleSheet("color: #fff; font-weight: bold;");
     overlayLayout->addWidget(m_offsetValueLabel);
 
-    auto* finalTitleLabel = new QLabel("  最终圆柱偏置区域  ", m_finalResultView);
+    auto* finalTitleLabel = new QLabel("  \u6700\u7ec8\u5706\u67f1\u504f\u7f6e\u533a\u57df  ", m_finalResultView);
     finalTitleLabel->setObjectName("overlayPanel");
     finalTitleLabel->setStyleSheet(overlayStyle);
     finalTitleLabel->adjustSize();
@@ -129,20 +119,30 @@ void CylindricalOffsetViews::setupViews() {
     });
 
     overlayBottom->adjustSize();
-    overlayBottom->move(8, 36);  // below the finalResult title
+    overlayBottom->move(8, 36);
     overlayBottom->show();
 
-    // ---- 主布局 ----
-    auto* mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(0, 0, 0, 0);
+    // ---- 右下角：3D圆柱视图占位 ----
+    m_cylinderPlaceholder = new QWidget(this);
+    auto* phLayout = new QVBoxLayout(m_cylinderPlaceholder);
+    phLayout->setContentsMargins(0, 0, 0, 0);
+    phLayout->setSpacing(0);
 
-    m_vertSplitter = new QSplitter(Qt::Vertical, this);
-    m_vertSplitter->addWidget(m_horizSplitter);
-    m_vertSplitter->addWidget(frameBottom);
-    m_vertSplitter->setStretchFactor(0, 1);
-    m_vertSplitter->setStretchFactor(1, 2);
+    // ---- 2x2 网格布局 ----
+    auto* gridLayout = new QGridLayout(this);
+    gridLayout->setContentsMargins(0, 0, 0, 0);
+    gridLayout->setSpacing(2);
 
-    mainLayout->addWidget(m_vertSplitter);
+    gridLayout->addWidget(frameLeft, 0, 0);
+    gridLayout->addWidget(frameRight, 0, 1);
+    gridLayout->addWidget(frameBottom, 1, 0);
+    gridLayout->addWidget(m_cylinderPlaceholder, 1, 1);
+
+    // 行列等分
+    gridLayout->setRowStretch(0, 1);
+    gridLayout->setRowStretch(1, 1);
+    gridLayout->setColumnStretch(0, 1);
+    gridLayout->setColumnStretch(1, 1);
 }
 
 void CylindricalOffsetViews::setOffsetBoundaryResults(
@@ -202,4 +202,12 @@ void CylindricalOffsetViews::clear() {
 
 void CylindricalOffsetViews::clearResults() {
     clear();
+}
+
+void CylindricalOffsetViews::setCylinderView(QWidget* view)
+{
+    if (!m_cylinderPlaceholder) return;
+    view->setParent(m_cylinderPlaceholder);
+    m_cylinderPlaceholder->layout()->addWidget(view);
+    view->show();
 }

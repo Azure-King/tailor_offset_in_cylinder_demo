@@ -72,30 +72,72 @@ int main(int argc, char* argv[]) {
     auto* view = viewContainer->mainView(); // 主视图用于工具选择
     view->setCylinderRadius(100.0f);  // set boundary width to match cylinder circumference
 
-    // 右侧垂直分割器：上方分页视图 + 下方3D圆柱视图
-    auto* rightSplitter = new QSplitter(Qt::Vertical, mainSplitter);
-
-    // === 分页控件：切换流水线视图 / 周期裁剪视图 ===
-    auto* tabWidget = new QTabWidget(rightSplitter);
+    // === 分页控件：切换流水线视图 / 周期裁剪视图 / 圆柱偏置视图 ===
+    auto* tabWidget = new QTabWidget();
     tabWidget->setTabPosition(QTabWidget::North);
 
-    // Tab 1: 流水线四视图
-    tabWidget->addTab(viewContainer, "流水线 (1-2)");
+    // ---- Tab 1: 流水线（上排双视图 + 下排3D圆柱，可拖动） ----
+    auto* tab1Container = new QWidget();
+    auto* tab1Layout = new QVBoxLayout(tab1Container);
+    tab1Layout->setContentsMargins(0, 0, 0, 0);
+    tab1Layout->setSpacing(0);
 
-    // Tab 2: 周期裁剪视图 (视图 6, 7, 8)
+    auto* tab1Splitter = new QSplitter(Qt::Vertical, tab1Container);
+    tab1Splitter->addWidget(viewContainer);  // 上排：四视图容器
+
+    auto* tab1CylinderPlaceholder = new QWidget(tab1Splitter);
+    auto* tab1PhLayout = new QVBoxLayout(tab1CylinderPlaceholder);
+    tab1PhLayout->setContentsMargins(0, 0, 0, 0);
+    tab1PhLayout->setSpacing(0);
+    tab1Splitter->addWidget(tab1CylinderPlaceholder);
+
+    // 上下初始比例接近 1:1，加大圆柱视图占比，允许用户拖动
+    tab1Splitter->setSizes({400, 500});
+    tab1Splitter->setStretchFactor(0, 1);
+    tab1Splitter->setStretchFactor(1, 1);
+
+    tab1Layout->addWidget(tab1Splitter);
+    tabWidget->addTab(tab1Container, "流水线 (1-2)");
+
+    // ---- Tab 2: 周期裁剪（2x2 网格，右下为3D圆柱）----
     auto* periodicViews = new PeriodicClippingViews(tabWidget);
     tabWidget->addTab(periodicViews, "周期裁剪 (6-8)");
 
-    // Tab 3: 圆柱偏置视图 (视图 9, 10, 11)
+    // ---- Tab 3: 圆柱偏置（2x2 网格，右下为3D圆柱）----
     auto* offsetViews = new CylindricalOffsetViews(tabWidget);
     tabWidget->addTab(offsetViews, "圆柱偏置 (9-11)");
 
-    rightSplitter->addWidget(tabWidget);
-
-    // 第五视图：3D 圆柱视图
-    auto* cylinder3DView = new Cylinder3DView(&window);
+    // 第五视图：3D 圆柱视图（单例，通过 reparent 在各 tab 间切换）
+    auto* cylinder3DView = new Cylinder3DView();
     cylinder3DView->setMinimumSize(400, 200);
-    rightSplitter->addWidget(cylinder3DView);
+
+    // 初始放置到 Tab 1 的占位区
+    tab1CylinderPlaceholder->layout()->addWidget(cylinder3DView);
+
+    // Tab 切换时 re-parent 3D 视图到对应占位区
+    QObject::connect(tabWidget, &QTabWidget::currentChanged,
+        [tabWidget, cylinder3DView, tab1CylinderPlaceholder, periodicViews, offsetViews](int index) {
+            // 关键：不能用 setParent(nullptr)，会销毁 QOpenGLWidget 的 OpenGL 上下文！
+            // 先用 removeWidget 从旧布局移除（不改变父控件关系，不销毁上下文）
+            QWidget* oldParent = cylinder3DView->parentWidget();
+            if (oldParent && oldParent->layout()) {
+                oldParent->layout()->removeWidget(cylinder3DView);
+            }
+
+            // 再 reparent 到新占位区
+            QWidget* newParent = nullptr;
+            switch (index) {
+            case 0: newParent = tab1CylinderPlaceholder; break;
+            case 1: newParent = periodicViews->cylinderPlaceholder(); break;
+            case 2: newParent = offsetViews->cylinderPlaceholder(); break;
+            }
+
+            if (newParent) {
+                cylinder3DView->setParent(newParent);
+                newParent->layout()->addWidget(cylinder3DView);
+                cylinder3DView->show();
+            }
+        });
 
     // 连接：边界线变更 → 圆柱半径更新（从宽度反算半径 R = width / 2π）
     QObject::connect(viewContainer, &FourViewContainer::boundariesUpdated,
@@ -226,11 +268,8 @@ int main(int argc, char* argv[]) {
                          cylinder3DView->setHighlightedOffsetBoundaryIndices(offsetIndices);
                      });
 
-    rightSplitter->setStretchFactor(0, 2);  // 四视图占更多空间
-    rightSplitter->setStretchFactor(1, 1);  // 3D视图
-
     mainSplitter->addWidget(leftSplitter);
-    mainSplitter->addWidget(rightSplitter);
+    mainSplitter->addWidget(tabWidget);
     mainSplitter->setStretchFactor(0, 0);
     mainSplitter->setStretchFactor(1, 1);
     mainSplitter->setSizes({ 300, 1000 });

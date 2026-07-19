@@ -4,10 +4,17 @@
 #include <QVector>
 #include "Sketch2DView.h"
 
-class QSplitter;
 class QSlider;
 class QLabel;
 
+/**
+ * @brief 圆柱偏置视图容器：2x2 网格布局，右下角为3D圆柱视图
+ *
+ * 左上（View 9）：偏置边界
+ * 右上（View 10）：布尔运算结果
+ * 左下（View 11）：最终偏置区域（含滑块）
+ * 右下：3D圆柱视图（外部注入，通过 setCylinderView）
+ */
 class CylindricalOffsetViews : public QWidget {
     Q_OBJECT
 
@@ -33,6 +40,11 @@ public:
     void clear();
     void clearResults();
 
+    /// 获取右下角 3D 视图占位容器（用于 reparent 操作）
+    QWidget* cylinderPlaceholder() const { return m_cylinderPlaceholder; }
+    /// 将 3D 圆柱视图放入右下角占位区
+    void setCylinderView(QWidget* view);
+
 signals:
     // 偏置距离变更（用户拖动滑块）
     void offsetDistanceChanged(double distance);
@@ -44,8 +56,7 @@ private:
     Sketch2DView* m_booleanResultView = nullptr;
     Sketch2DView* m_finalResultView = nullptr;
 
-    QSplitter* m_horizSplitter = nullptr;
-    QSplitter* m_vertSplitter = nullptr;
     QSlider* m_offsetSlider = nullptr;
     QLabel* m_offsetValueLabel = nullptr;
+    QWidget* m_cylinderPlaceholder = nullptr;  // 右下角3D视图占位容器
 };
