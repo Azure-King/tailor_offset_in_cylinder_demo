@@ -831,7 +831,7 @@ void FourViewContainer::processCylindricalOffset(double distance) {
 
     for (auto& loop : boundaryLoops) {
         size_t n = loop.size();
-        if (n < 2) continue;
+        if (n < 1) continue;
 
         // 构造零面积多边形：正向弧 + 反向弧
         // 多段线 ABC → ABCBA；闭合形状 ABCA → ABCACBA
@@ -884,7 +884,7 @@ void FourViewContainer::processCylindricalOffset(double distance) {
         const QColor kOriginalBoundaryColor(150, 155, 165);
         for (const auto& loop : boundaryLoops) {
             size_t m = loop.size();
-            if (m < 2) continue;
+            if (m < 1) continue;
             Sketch2DView::OffsetResultPolygon edgePoly;
             edgePoly.color = kOriginalBoundaryColor;
             edgePoly.isHole = false;
