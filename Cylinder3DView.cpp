@@ -947,44 +947,39 @@ void Cylinder3DView::mousePressEvent(QMouseEvent* event) {
 void Cylinder3DView::mouseMoveEvent(QMouseEvent* event) {
     QPoint delta = event->pos() - m_lastMousePos;
     m_lastMousePos = event->pos();
+    bool changed = false;
 
     if (m_isDragging) {
-        // 旋转：鼠标右拖 → 物体右侧转过来
-        // 鼠标上拖 → 物体顶部向你倾斜
+        // 左键拖拽：水平→旋转圆柱(m_rotationY)，垂直→上下移动中心(m_targetCenter.y)
+        // m_rotationX 始终锁定为 0（始终侧视圆柱）
+        m_rotationX = 0.0f;
         m_rotationY -= delta.x() * 0.4f;
-        m_rotationX += delta.y() * 0.4f;
+        // Clamp yaw to [-180, 180]
+        m_rotationY = std::fmod(m_rotationY, 360.0f);
+        if (m_rotationY > 180.0f) m_rotationY -= 360.0f;
+        if (m_rotationY < -180.0f) m_rotationY += 360.0f;
 
-        // Clamp pitch to avoid flipping
-        m_rotationX = std::clamp(m_rotationX, -89.0f, 89.0f);
+        float panScale = m_distance * 0.001f;
+        float cy = m_targetCenter.y() + delta.y() * panScale;
+        // Clamp to cylinder height range
+        float halfH = m_height * 0.5f;
+        m_targetCenter.setY(std::clamp(cy, -halfH, halfH));
 
+        changed = true;
         update();
         event->accept();
     } else if (m_isPanning) {
-        // 中键平移：
-        //   水平 (delta.x) → 沿相机右方向在 XZ 平面移动
-        //   垂直 (delta.y) → 沿 Y 轴上下移动（拖上→场景上移→看下方）
+        // 中键平移：只允许 Y 方向（上下平移），禁用 X 方向
         float rx = m_rotationX * static_cast<float>(M_PI) / 180.0f;
         float ry = m_rotationY * static_cast<float>(M_PI) / 180.0f;
         float panScale = m_distance * 0.001f;
 
-        // 计算相机右方向向量（XZ 平面投影），eye 绕 m_targetCenter
-        QVector3D orbitOffset(
-            m_distance * std::cos(rx) * std::sin(ry),
-            m_distance * std::sin(rx),
-            m_distance * std::cos(rx) * std::cos(ry)
-        );
-        QVector3D eye = QVector3D(m_targetCenter) + orbitOffset;
-        QVector3D forward = (QVector3D(m_targetCenter) - eye).normalized();
-        QVector3D right = QVector3D::crossProduct(forward, QVector3D(0.0f, 1.0f, 0.0f)).normalized();
-
-        // 水平: -delta.x 沿相机右方向（右拖→场景右移→中心左移，抓取感一致）
-        float cx = m_targetCenter.x() - right.x() * delta.x() * panScale;
-        float cz = m_targetCenter.z() - right.z() * delta.x() * panScale;
         // 垂直: delta.y 直接映射到 Y (拖上→Y减→场景上移)
         float cy = m_targetCenter.y() + delta.y() * panScale;
+        float halfH = m_height * 0.5f;
+        m_targetCenter.setY(std::clamp(cy, -halfH, halfH));
 
-        m_targetCenter = QVector3D(cx, cy, cz);
-
+        changed = true;
         update();
         event->accept();
     } else if (m_isZooming) {
@@ -993,10 +988,15 @@ void Cylinder3DView::mouseMoveEvent(QMouseEvent* event) {
         m_distance *= zoomFactor;
         m_distance = std::clamp(m_distance, 50.0f, 3000.0f);
 
+        changed = true;
         update();
         event->accept();
     } else {
         QOpenGLWidget::mouseMoveEvent(event);
+    }
+
+    if (changed) {
+        emit cameraChanged(m_rotationY, m_targetCenter.y(), m_distance);
     }
 }
 
@@ -1026,5 +1026,26 @@ void Cylinder3DView::wheelEvent(QWheelEvent* event) {
     m_distance *= std::pow(0.9f, delta);
     m_distance = std::clamp(m_distance, 50.0f, 3000.0f);
     update();
+    emit cameraChanged(m_rotationY, m_targetCenter.y(), m_distance);
     event->accept();
+}
+
+// ---- 相机状态 setters ----
+void Cylinder3DView::setRotationY(float yaw) {
+    m_rotationY = std::fmod(yaw, 360.0f);
+    if (m_rotationY > 180.0f) m_rotationY -= 360.0f;
+    if (m_rotationY < -180.0f) m_rotationY += 360.0f;
+    m_rotationX = 0.0f;  // 始终锁定侧视
+    update();
+}
+
+void Cylinder3DView::setTargetCenterY(float centerY) {
+    float halfH = m_height * 0.5f;
+    m_targetCenter.setY(std::clamp(centerY, -halfH, halfH));
+    update();
+}
+
+void Cylinder3DView::setDistance(float dist) {
+    m_distance = std::clamp(dist, 50.0f, 3000.0f);
+    update();
 }

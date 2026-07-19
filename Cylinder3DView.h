@@ -56,6 +56,19 @@ public:
     void setHighlightedOffsetBoundaryIndices(const QSet<int>& indices);
     void clearHighlightedOffsetBoundaryIndices();
 
+    // ---- 相机状态访问与联动 ----
+    float rotationY() const { return m_rotationY; }
+    float targetCenterY() const { return m_targetCenter.y(); }
+    float distance() const { return m_distance; }
+    float polygonYOffset() const { return m_polygonYOffset; }
+    void setRotationY(float yaw);
+    void setTargetCenterY(float centerY);
+    void setDistance(float dist);
+
+signals:
+    /// 相机参数变更（由用户交互触发），用于视图联动
+    void cameraChanged(float rotationY, float targetCenterY, float distance);
+
 protected:
     void initializeGL() override;
     void resizeGL(int w, int h) override;
@@ -122,7 +135,7 @@ private:
     QSet<int> m_highlightedOffsetBoundaryIndices;
 
     // Camera state
-    float m_rotationX = 30.0f;   // pitch (degrees), looking down
+    float m_rotationX = 0.0f;    // pitch (degrees), locked to side view
     float m_rotationY = -45.0f;  // yaw (degrees)
     float m_distance = 500.0f;   // camera distance from origin
     QVector3D m_targetCenter;    // orbit center in world space (supports vertical pan)

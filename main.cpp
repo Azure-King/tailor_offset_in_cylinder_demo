@@ -268,6 +268,56 @@ int main(int argc, char* argv[]) {
                          cylinder3DView->setHighlightedOffsetBoundaryIndices(offsetIndices);
                      });
 
+    // ========================================
+    // 视图联动：View 8 ↔ View 11 ↔ Cylinder3DView
+    // ========================================
+    auto* view8 = periodicViews->mergedView();
+    auto* view11 = offsetViews->finalResultView();
+
+    // View 8 → View 11: 双向同步 pan + zoom（视图范围始终保持一致）
+    QObject::connect(view8, &Sketch2DView::viewChanged,
+        view11, [view11](qreal scale, QPointF offset) {
+            view11->setScale(scale);
+            view11->setOffset(offset);
+        });
+
+    // View 11 → View 8: 双向同步
+    QObject::connect(view11, &Sketch2DView::viewChanged,
+        view8, [view8](qreal scale, QPointF offset) {
+            view8->setScale(scale);
+            view8->setOffset(offset);
+        });
+
+    // View 8/11 垂直平移 → 3D 圆柱中心 Y 偏移
+    // 关键：2D 视图世界坐标 Y 和 3D 圆柱 Y 之间差一个 polygonYOffset
+    // 因为多边形投影到圆柱面时会通过 polygonYOffset 居中
+    QObject::connect(view8, &Sketch2DView::viewChanged,
+        cylinder3DView, [cylinder3DView](qreal, QPointF offset) {
+            float centerY = static_cast<float>(offset.y());
+            centerY += cylinder3DView->polygonYOffset();
+            cylinder3DView->setTargetCenterY(centerY);
+        });
+    QObject::connect(view11, &Sketch2DView::viewChanged,
+        cylinder3DView, [cylinder3DView](qreal, QPointF offset) {
+            float centerY = static_cast<float>(offset.y());
+            centerY += cylinder3DView->polygonYOffset();
+            cylinder3DView->setTargetCenterY(centerY);
+        });
+
+    // 3D 圆柱中心 Y 变化 → View 8/11 垂直平移
+    QObject::connect(cylinder3DView, &Cylinder3DView::cameraChanged,
+        view8, [view8, cylinder3DView](float /*ry*/, float centerY, float /*dist*/) {
+            QPointF offset = view8->offset();
+            offset.setY(static_cast<qreal>(centerY - cylinder3DView->polygonYOffset()));
+            view8->setOffset(offset);
+        });
+    QObject::connect(cylinder3DView, &Cylinder3DView::cameraChanged,
+        view11, [view11, cylinder3DView](float /*ry*/, float centerY, float /*dist*/) {
+            QPointF offset = view11->offset();
+            offset.setY(static_cast<qreal>(centerY - cylinder3DView->polygonYOffset()));
+            view11->setOffset(offset);
+        });
+
     mainSplitter->addWidget(leftSplitter);
     mainSplitter->addWidget(tabWidget);
     mainSplitter->setStretchFactor(0, 0);
@@ -337,8 +387,8 @@ int main(int argc, char* argv[]) {
         // 更新视图
         view->setPolygons(currentPolygons);
 
-        // 同步更新其他三个视图
-        viewContainer->synchronizeViews();
+        // 触发完整计算流水线（包含同步视图）
+        viewContainer->runFullPipeline();
 
         // 更新模型树
         int startIndex = polygonsItem->childCount();

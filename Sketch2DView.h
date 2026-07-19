@@ -280,4 +280,7 @@ signals:
 
     // 边界线变更信号：直接传递左右边界位置（不再强制对称）
     void boundariesChanged(float left, float right);
+
+    // 视图状态变更（pan/zoom 由用户操作触发），用于视图间联动
+    void viewChanged(qreal scale, QPointF offset);
 };

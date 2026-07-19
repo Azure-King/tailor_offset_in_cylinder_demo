@@ -600,6 +600,7 @@ void Sketch2DView::mouseMoveEvent(QMouseEvent* event) {
         m_offset -= QPointF(delta.x() / m_scale, -delta.y() / m_scale);
         m_panStart = event->position();
         update();
+        emit viewChanged(m_scale, m_offset);
         QWidget::mouseMoveEvent(event);
         return;
     }
@@ -1535,6 +1536,7 @@ void Sketch2DView::wheelEvent(QWheelEvent* event) {
     m_offset += oldWorldPos - newWorldPos;
 
     update();
+    emit viewChanged(m_scale, m_offset);
     event->accept();
 }
 

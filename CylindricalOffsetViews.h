@@ -45,6 +45,11 @@ public:
     /// 将 3D 圆柱视图放入右下角占位区
     void setCylinderView(QWidget* view);
 
+    /// 获取各 2D 子视图（用于联动）
+    Sketch2DView* offsetBoundaryView() const { return m_offsetBoundaryView; }
+    Sketch2DView* booleanResultView() const { return m_booleanResultView; }
+    Sketch2DView* finalResultView() const { return m_finalResultView; }
+
 signals:
     // 偏置距离变更（用户拖动滑块）
     void offsetDistanceChanged(double distance);

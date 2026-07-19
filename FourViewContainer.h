@@ -68,7 +68,7 @@ public slots:
     /// 圆柱偏置流水线（从 View 7/8 结果出发）
     void processCylindricalOffset(double distance);
 
-private slots:
+    /// 完整计算流水线（从原始多边形到最终渲染结果）
     void runFullPipeline();
 
 private:
