@@ -101,11 +101,11 @@ int main(int argc, char* argv[]) {
 
     // ---- Tab 2: 周期裁剪（2x2 网格，右下为3D圆柱）----
     auto* periodicViews = new PeriodicClippingViews(tabWidget);
-    tabWidget->addTab(periodicViews, "周期裁剪 (6-8)");
+    tabWidget->addTab(periodicViews, "周期裁剪 (3-5)");
 
     // ---- Tab 3: 圆柱偏置（2x2 网格，右下为3D圆柱）----
     auto* offsetViews = new CylindricalOffsetViews(tabWidget);
-    tabWidget->addTab(offsetViews, "圆柱偏置 (9-11)");
+    tabWidget->addTab(offsetViews, "圆柱偏置 (6-8)");
 
     // 第五视图：3D 圆柱视图（单例，通过 reparent 在各 tab 间切换）
     auto* cylinder3DView = new Cylinder3DView();
@@ -146,7 +146,7 @@ int main(int argc, char* argv[]) {
                          cylinder3DView->setCylinderRadius(radius);
                      });
 
-    // 连接：周期裁剪结果 → 更新第6、7视图
+    // 连接：周期裁剪结果 → 更新第3、4视图
     QObject::connect(viewContainer, &FourViewContainer::periodicClipResultReady,
                      periodicViews, [periodicViews](
                          const QVector<Sketch2DView::OffsetResultPolygon>& before,
@@ -155,11 +155,11 @@ int main(int argc, char* argv[]) {
                          periodicViews->setAfterPolygons(after);
                      });
 
-    // 连接：圆柱区域合并结果 → 展示到 View 8 + 贴到3D圆柱面
+    // 连接：圆柱区域合并结果 → 展示到 View 5 + 贴到3D圆柱面
     QObject::connect(viewContainer, &FourViewContainer::periodicCylindricalResultReady,
                      periodicViews, [periodicViews, cylinder3DView](
                          const QVector<Sketch2DView::OffsetResultPolygon>& cylindrical) {
-                         // View 8 展示圆柱区域着色多边形
+                         // View 5 展示圆柱区域着色多边形
                          periodicViews->setMergedPolygons(cylindrical);
 
                          // 同时将多边形贴到 3D 圆柱面
@@ -201,7 +201,7 @@ int main(int argc, char* argv[]) {
                          const QVector<Sketch2DView::OffsetResultPolygon>& boundaries,
                          const QVector<Sketch2DView::OffsetResultPolygon>& booleanRst,
                          const QVector<Sketch2DView::OffsetResultPolygon>& finalRst) {
-                         // View 9, 10, 11 展示偏置流水线结果
+                         // View 6, 7, 8 展示偏置流水线结果
                          offsetViews->setOffsetBoundaryResults(boundaries);
                          offsetViews->setBooleanResults(booleanRst);
                          offsetViews->setFinalResults(finalRst);
@@ -269,53 +269,53 @@ int main(int argc, char* argv[]) {
                      });
 
     // ========================================
-    // 视图联动：View 8 ↔ View 11 ↔ Cylinder3DView
+    // 视图联动：View 5 ↔ View 8 ↔ Cylinder3DView
     // ========================================
-    auto* view8 = periodicViews->mergedView();
-    auto* view11 = offsetViews->finalResultView();
+    auto* view5 = periodicViews->mergedView();
+    auto* view8 = offsetViews->finalResultView();
 
-    // View 8 → View 11: 双向同步 pan + zoom（视图范围始终保持一致）
-    QObject::connect(view8, &Sketch2DView::viewChanged,
-        view11, [view11](qreal scale, QPointF offset) {
-            view11->setScale(scale);
-            view11->setOffset(offset);
-        });
-
-    // View 11 → View 8: 双向同步
-    QObject::connect(view11, &Sketch2DView::viewChanged,
+    // View 5 → View 8: 双向同步 pan + zoom（视图范围始终保持一致）
+    QObject::connect(view5, &Sketch2DView::viewChanged,
         view8, [view8](qreal scale, QPointF offset) {
             view8->setScale(scale);
             view8->setOffset(offset);
         });
 
-    // View 8/11 垂直平移 → 3D 圆柱中心 Y 偏移
+    // View 8 → View 5: 双向同步
+    QObject::connect(view8, &Sketch2DView::viewChanged,
+        view5, [view5](qreal scale, QPointF offset) {
+            view5->setScale(scale);
+            view5->setOffset(offset);
+        });
+
+    // View 5/8 垂直平移 → 3D 圆柱中心 Y 偏移
     // 关键：2D 视图世界坐标 Y 和 3D 圆柱 Y 之间差一个 polygonYOffset
     // 因为多边形投影到圆柱面时会通过 polygonYOffset 居中
+    QObject::connect(view5, &Sketch2DView::viewChanged,
+        cylinder3DView, [cylinder3DView](qreal, QPointF offset) {
+            float centerY = static_cast<float>(offset.y());
+            centerY += cylinder3DView->polygonYOffset();
+            cylinder3DView->setTargetCenterY(centerY);
+        });
     QObject::connect(view8, &Sketch2DView::viewChanged,
         cylinder3DView, [cylinder3DView](qreal, QPointF offset) {
             float centerY = static_cast<float>(offset.y());
             centerY += cylinder3DView->polygonYOffset();
             cylinder3DView->setTargetCenterY(centerY);
         });
-    QObject::connect(view11, &Sketch2DView::viewChanged,
-        cylinder3DView, [cylinder3DView](qreal, QPointF offset) {
-            float centerY = static_cast<float>(offset.y());
-            centerY += cylinder3DView->polygonYOffset();
-            cylinder3DView->setTargetCenterY(centerY);
-        });
 
-    // 3D 圆柱中心 Y 变化 → View 8/11 垂直平移
+    // 3D 圆柱中心 Y 变化 → View 5/8 垂直平移
+    QObject::connect(cylinder3DView, &Cylinder3DView::cameraChanged,
+        view5, [view5, cylinder3DView](float /*ry*/, float centerY, float /*dist*/) {
+            QPointF offset = view5->offset();
+            offset.setY(static_cast<qreal>(centerY - cylinder3DView->polygonYOffset()));
+            view5->setOffset(offset);
+        });
     QObject::connect(cylinder3DView, &Cylinder3DView::cameraChanged,
         view8, [view8, cylinder3DView](float /*ry*/, float centerY, float /*dist*/) {
             QPointF offset = view8->offset();
             offset.setY(static_cast<qreal>(centerY - cylinder3DView->polygonYOffset()));
             view8->setOffset(offset);
-        });
-    QObject::connect(cylinder3DView, &Cylinder3DView::cameraChanged,
-        view11, [view11, cylinder3DView](float /*ry*/, float centerY, float /*dist*/) {
-            QPointF offset = view11->offset();
-            offset.setY(static_cast<qreal>(centerY - cylinder3DView->polygonYOffset()));
-            view11->setOffset(offset);
         });
 
     mainSplitter->addWidget(leftSplitter);

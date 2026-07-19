@@ -121,6 +121,10 @@ public:
     float boundaryLeft() const { return m_boundaryLeft; }
     float boundaryRight() const { return m_boundaryRight; }
 
+    // 边界线交互控制（独立于多边形编辑的 readOnly）
+    void setBoundaryReadOnly(bool ro) { m_boundaryReadOnly = ro; }
+    bool isBoundaryReadOnly() const { return m_boundaryReadOnly; }
+
     // Viewport state
     qreal scale() const { return m_scale; }
     QPointF offset() const { return m_offset; }
@@ -254,6 +258,7 @@ private:
 
     // Read-only mode
     bool m_readOnly = false;
+    bool m_boundaryReadOnly = false;  // 边界线是否禁止拖拽
 
     // Context menu state
     QPointF m_contextMenuPosition;

@@ -130,6 +130,7 @@ void FourViewContainer::setupViews() {
 
 	// Set secondary view to read-only mode
 	m_topRightView->setReadOnly(true);
+	m_topRightView->setBoundaryReadOnly(true);
 
 	// Connect main view changes to auto-run the full pipeline
 	connect(m_mainView, &Sketch2DView::polylineAdded, this, &FourViewContainer::runFullPipeline);
@@ -442,14 +443,14 @@ void FourViewContainer::processPeriodicClip() {
 	auto clippedArcs = tailor_visualization::PeriodicClipper::ClipToStrip(
 		m_mergedFillArcs, bLeft, bRight);
 
-	// --- View 6: 周期裁剪后的各分量 ---
+	// --- View 3: 周期裁剪后的各分量 ---
 	QVector<Sketch2DView::OffsetResultPolygon> clippedResults;
 	for (size_t i = 0; i < clippedArcs.size(); ++i) {
 		QColor color = s_colorPalette[i % s_colorPalette.size()];
 		clippedResults.append(arcsToPolygon(clippedArcs[i], color));
 	}
 
-    // --- View 7: 所有裁剪分量求并集（简单布尔并集） ---
+    // --- View 4: 所有裁剪分量求并集（简单布尔并集） ---
     QVector<Sketch2DView::OffsetResultPolygon> mergedResults;
     QVector<Sketch2DView::OffsetResultPolygon> cylindricalResults;
     if (!clippedArcs.empty()) {
@@ -460,7 +461,7 @@ void FourViewContainer::processPeriodicClip() {
         auto mergedAnnotated = boolOp.ExecuteOnlySubjectPatternAnnotated(
             static_cast<const tailor_visualization::IFillType*>(nullptr));
 
-        // 保存 View 7 并集结果，供圆柱偏置流水线使用
+        // 保存 View 4 并集结果，供圆柱偏置流水线使用
         m_mergedAnnotated = mergedAnnotated;
 
         // --- 构建圆柱区域树（放在渲染之前，用于区域颜色分配）---
@@ -553,15 +554,15 @@ void FourViewContainer::processPeriodicClip() {
             polyToBestArea[pi] = bestArea;
         }
 
-        // ==== View 7: 原始布尔并集多边形 + 圆柱区域着色 ====
+        // ==== View 4: 原始布尔并集多边形 + 圆柱区域着色 ====
         // 直接使用 mergedAnnotated 的多边形形状进行填充，
         // 同一圆柱区域的多边形使用相同颜色，避免边界拆分导致的颜色分裂
         for (size_t i = 0; i < mergedAnnotated.size(); ++i) {
             mergedResults.append(arcsToPolygon(mergedAnnotated[i].arcs, polyColors[i]));
         }
 
-        // ==== View 8: 原始多边形填充 + 区域边界描边 ====
-        // 填充：与 View 7 相同的原始多边形（不再构建连接左右边界的假填充面）
+        // ==== View 5: 原始多边形填充 + 区域边界描边 ====
+        // 填充：与 View 4 相同的原始多边形（不再构建连接左右边界的假填充面）
         m_cylindricalResultFillCount = static_cast<int>(mergedAnnotated.size());
         for (size_t i = 0; i < mergedAnnotated.size(); ++i) {
             cylindricalResults.append(arcsToPolygon(mergedAnnotated[i].arcs, polyColors[i]));

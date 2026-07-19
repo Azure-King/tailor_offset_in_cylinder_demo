@@ -47,7 +47,7 @@ signals:
     void periodicClipResultReady(
         const QVector<Sketch2DView::OffsetResultPolygon>& before,
         const QVector<Sketch2DView::OffsetResultPolygon>& after);
-    // 圆柱区域合并结果（View 8 + 3D圆柱贴面）
+    // 圆柱区域合并结果（View 5 + 3D圆柱贴面）
     void periodicCylindricalResultReady(
         const QVector<Sketch2DView::OffsetResultPolygon>& cylindrical);
     // 区域树已构建（用于左侧面板刷新区域结果树）
@@ -65,7 +65,7 @@ public slots:
     /// 刷新周期裁剪（用于边界线变更后重新裁剪）
     void refreshPeriodicClip();
 
-    /// 圆柱偏置流水线（从 View 7/8 结果出发）
+    /// 圆柱偏置流水线（从 View 4/5 结果出发）
     void processCylindricalOffset(double distance);
 
     /// 完整计算流水线（从原始多边形到最终渲染结果）

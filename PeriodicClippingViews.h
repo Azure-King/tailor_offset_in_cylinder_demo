@@ -9,9 +9,9 @@
 /**
  * @brief 周期裁剪视图容器：2x2 网格布局，右下角为3D圆柱视图
  * 
- * 左上（View 6）：去自交规范化后的多边形（周期裁剪前各分量）
- * 右上（View 7）：周期裁剪后的多边形（简单布尔并集）
- * 左下（View 8）：圆柱区域合并结果（BuildCylindricalAreas + 展平）
+ * 左上（View 3）：去自交规范化后的多边形（周期裁剪前各分量）
+ * 右上（View 4）：周期裁剪后的多边形（简单布尔并集）
+ * 左下（View 5）：圆柱区域合并结果（BuildCylindricalAreas + 展平）
  * 右下：3D圆柱视图（外部注入，通过 setCylinderView）
  */
 class PeriodicClippingViews : public QWidget {
@@ -29,11 +29,11 @@ public:
     /// 将 3D 圆柱视图放入右下角占位区
     void setCylinderView(QWidget* view);
 
-    /// 设置裁剪前的规范化多边形（左上视图 6）
+    /// 设置裁剪前的规范化多边形（左上视图 3）
     void setBeforePolygons(const QVector<Sketch2DView::OffsetResultPolygon>& polygons);
-    /// 设置裁剪后的简单并集多边形（右上视图 7）
+    /// 设置裁剪后的简单并集多边形（右上视图 4）
     void setAfterPolygons(const QVector<Sketch2DView::OffsetResultPolygon>& polygons);
-    /// 设置圆柱区域合并结果（左下视图 8）
+    /// 设置圆柱区域合并结果（左下视图 5）
     void setMergedPolygons(const QVector<Sketch2DView::OffsetResultPolygon>& polygons);
 
     /// 同步边界线到所有子视图

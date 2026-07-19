@@ -10,9 +10,9 @@ class QLabel;
 /**
  * @brief 圆柱偏置视图容器：2x2 网格布局，右下角为3D圆柱视图
  *
- * 左上（View 9）：偏置边界
- * 右上（View 10）：布尔运算结果
- * 左下（View 11）：最终偏置区域（含滑块）
+ * 左上（View 6）：偏置边界
+ * 右上（View 7）：布尔运算结果
+ * 左下（View 8）：最终偏置区域（含滑块）
  * 右下：3D圆柱视图（外部注入，通过 setCylinderView）
  */
 class CylindricalOffsetViews : public QWidget {

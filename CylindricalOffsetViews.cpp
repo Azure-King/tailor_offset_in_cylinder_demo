@@ -21,8 +21,11 @@ void CylindricalOffsetViews::setupViews() {
     m_finalResultView = new Sketch2DView(this);
 
     m_offsetBoundaryView->setReadOnly(true);
+    m_offsetBoundaryView->setBoundaryReadOnly(true);
     m_booleanResultView->setReadOnly(true);
+    m_booleanResultView->setBoundaryReadOnly(true);
     m_finalResultView->setReadOnly(true);
+    m_finalResultView->setBoundaryReadOnly(true);
 
     // 浮层面板样式
     const QString overlayStyle = R"(
@@ -40,7 +43,7 @@ void CylindricalOffsetViews::setupViews() {
         }
     )";
 
-    // ---- 左上：View 9 — 偏置边界 ----
+    // ---- 左上：View 6 — 偏置边界 ----
     auto* frameLeft = new QFrame(this);
     frameLeft->setFrameShape(QFrame::StyledPanel);
     frameLeft->setFrameShadow(QFrame::Sunken);
@@ -51,13 +54,13 @@ void CylindricalOffsetViews::setupViews() {
     auto* overlayLeft = new QLabel(m_offsetBoundaryView);
     overlayLeft->setObjectName("overlayPanel");
     overlayLeft->setStyleSheet(overlayStyle);
-    overlayLeft->setText("  偏置边界 (去自交后, B)  ");
+    overlayLeft->setText("  6. 偏置边界  ");
     overlayLeft->setWordWrap(false);
     overlayLeft->adjustSize();
     overlayLeft->move(8, 8);
     overlayLeft->show();
 
-    // ---- 右上：View 10 — 布尔运算结果 ----
+    // ---- 右上：View 7 — 布尔差值 ----
     auto* frameRight = new QFrame(this);
     frameRight->setFrameShape(QFrame::StyledPanel);
     frameRight->setFrameShadow(QFrame::Sunken);
@@ -68,13 +71,13 @@ void CylindricalOffsetViews::setupViews() {
     auto* overlayRight = new QLabel(m_booleanResultView);
     overlayRight->setObjectName("overlayPanel");
     overlayRight->setStyleSheet(overlayStyle);
-    overlayRight->setText("  布尔运算结果 (A \u00b1 B)  ");
+    overlayRight->setText("  7. 布尔差值  ");
     overlayRight->setWordWrap(false);
     overlayRight->adjustSize();
     overlayRight->move(8, 8);
     overlayRight->show();
 
-    // ---- 左下：View 11 — 最终偏置区域 + 滑块 ----
+    // ---- 左下：View 8 — 最终偏置 + 滑块 ----
     auto* frameBottom = new QFrame(this);
     frameBottom->setFrameShape(QFrame::StyledPanel);
     frameBottom->setFrameShadow(QFrame::Sunken);
@@ -105,7 +108,7 @@ void CylindricalOffsetViews::setupViews() {
     m_offsetValueLabel->setStyleSheet("color: #fff; font-weight: bold;");
     overlayLayout->addWidget(m_offsetValueLabel);
 
-    auto* finalTitleLabel = new QLabel("  \u6700\u7ec8\u5706\u67f1\u504f\u7f6e\u533a\u57df  ", m_finalResultView);
+    auto* finalTitleLabel = new QLabel("  8. 最终偏置  ", m_finalResultView);
     finalTitleLabel->setObjectName("overlayPanel");
     finalTitleLabel->setStyleSheet(overlayStyle);
     finalTitleLabel->adjustSize();

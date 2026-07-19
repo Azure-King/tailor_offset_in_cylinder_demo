@@ -493,7 +493,7 @@ void Sketch2DView::mousePressEvent(QMouseEvent* event) {
     // In read-only mode, only allow boundary drag, panning (middle mouse) and zooming (wheel)
     if (m_readOnly) {
         // Check if clicking near a boundary line in read-only mode
-        if (event->button() == Qt::LeftButton) {
+        if (event->button() == Qt::LeftButton && !m_boundaryReadOnly) {
             float leftScreenX = static_cast<float>(width()) / 2.0f + (m_boundaryLeft - m_offset.x()) * m_scale;
             float rightScreenX = static_cast<float>(width()) / 2.0f + (m_boundaryRight - m_offset.x()) * m_scale;
 
@@ -529,7 +529,7 @@ void Sketch2DView::mousePressEvent(QMouseEvent* event) {
     }
 
     // Check for boundary line drag (left button, in edit mode)
-    if (event->button() == Qt::LeftButton) {
+    if (event->button() == Qt::LeftButton && !m_boundaryReadOnly) {
         float leftScreenX = static_cast<float>(width()) / 2.0f + (m_boundaryLeft - m_offset.x()) * m_scale;
         float rightScreenX = static_cast<float>(width()) / 2.0f + (m_boundaryRight - m_offset.x()) * m_scale;
 
@@ -606,7 +606,7 @@ void Sketch2DView::mouseMoveEvent(QMouseEvent* event) {
     }
 
     // Handle boundary line dragging
-    if (m_dragMode == DragMode::Boundary && (event->buttons() & Qt::LeftButton)) {
+    if (m_dragMode == DragMode::Boundary && (event->buttons() & Qt::LeftButton) && !m_boundaryReadOnly) {
         QPointF deltaScreen = screenPos - m_dragStartPos;
         float deltaWorld = static_cast<float>(deltaScreen.x() / m_scale);
         const float minWidth = 2.0f * static_cast<float>(M_PI);  // Minimum width = 2π
@@ -749,13 +749,14 @@ void Sketch2DView::mouseMoveEvent(QMouseEvent* event) {
         }
     }
 
-    // 悬停在边界线上时切换光标
+    // 悬停在边界线上时切换光标（仅当边界线可交互时）
     if (m_dragMode == DragMode::None) {
         float leftScreenX = static_cast<float>(width()) / 2.0f + (m_boundaryLeft - m_offset.x()) * m_scale;
         float rightScreenX = static_cast<float>(width()) / 2.0f + (m_boundaryRight - m_offset.x()) * m_scale;
         const float hitThreshold = 10.0f;
-        bool nearBoundary = (std::abs(screenPos.x() - leftScreenX) < hitThreshold) ||
-                            (std::abs(screenPos.x() - rightScreenX) < hitThreshold);
+        bool nearBoundary = !m_boundaryReadOnly &&
+            ((std::abs(screenPos.x() - leftScreenX) < hitThreshold) ||
+             (std::abs(screenPos.x() - rightScreenX) < hitThreshold));
         setCursor(nearBoundary ? Qt::SplitHCursor : Qt::ArrowCursor);
     }
 

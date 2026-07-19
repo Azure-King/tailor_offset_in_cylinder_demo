@@ -13,58 +13,72 @@ PeriodicClippingViews::PeriodicClippingViews(QWidget* parent)
 
 void PeriodicClippingViews::setupViews()
 {
-    // === 2x2 网格布局 ===
-    auto* gridLayout = new QGridLayout(this);
-    gridLayout->setContentsMargins(0, 0, 0, 0);
-    gridLayout->setSpacing(2);
+    // 浮层面板样式（与 CylindricalOffsetViews 一致）
+    const QString overlayStyle = R"(
+        QWidget#overlayPanel {
+            background: rgba(40, 40, 45, 210);
+            border: 1px solid #555;
+            border-radius: 4px;
+        }
+        QLabel { color: #ddd; font-size: 11px; }
+    )";
 
-    // === View 6 — 周期裁剪各分量（左上）===
+    // === View 3 — 裁剪分量（左上）===
     auto* leftFrame = new QFrame(this);
-    leftFrame->setFrameStyle(QFrame::Box | QFrame::Plain);
+    leftFrame->setFrameShape(QFrame::StyledPanel);
+    leftFrame->setFrameShadow(QFrame::Sunken);
     auto* leftLayout = new QVBoxLayout(leftFrame);
     leftLayout->setContentsMargins(0, 0, 0, 0);
-    leftLayout->setSpacing(0);
+    leftLayout->addWidget(m_beforeView = new Sketch2DView(leftFrame));
 
-    auto* leftLabel = new QLabel("6. 周期裁剪 (各分量)", leftFrame);
-    leftLabel->setAlignment(Qt::AlignCenter);
-    leftLabel->setStyleSheet("QLabel { background: #333; color: #ccc; font-size: 11px; padding: 2px; }");
-    leftLayout->addWidget(leftLabel);
-
-    m_beforeView = new Sketch2DView(leftFrame);
     m_beforeView->setReadOnly(true);
-    leftLayout->addWidget(m_beforeView);
+    m_beforeView->setBoundaryReadOnly(true);
 
-    // === View 7 — 周期裁剪并集（简单布尔并集）（右上）===
+    auto* leftOverlay = new QLabel(m_beforeView);
+    leftOverlay->setObjectName("overlayPanel");
+    leftOverlay->setStyleSheet(overlayStyle);
+    leftOverlay->setText("  3. 裁剪分量  ");
+    leftOverlay->adjustSize();
+    leftOverlay->move(8, 8);
+    leftOverlay->show();
+
+    // === View 4 — 裁剪并集（右上）===
     auto* middleFrame = new QFrame(this);
-    middleFrame->setFrameStyle(QFrame::Box | QFrame::Plain);
+    middleFrame->setFrameShape(QFrame::StyledPanel);
+    middleFrame->setFrameShadow(QFrame::Sunken);
     auto* middleLayout = new QVBoxLayout(middleFrame);
     middleLayout->setContentsMargins(0, 0, 0, 0);
-    middleLayout->setSpacing(0);
+    middleLayout->addWidget(m_afterView = new Sketch2DView(middleFrame));
 
-    auto* middleLabel = new QLabel("7. 周期并集 (简单并集)", middleFrame);
-    middleLabel->setAlignment(Qt::AlignCenter);
-    middleLabel->setStyleSheet("QLabel { background: #333; color: #ccc; font-size: 11px; padding: 2px; }");
-    middleLayout->addWidget(middleLabel);
-
-    m_afterView = new Sketch2DView(middleFrame);
     m_afterView->setReadOnly(true);
-    middleLayout->addWidget(m_afterView);
+    m_afterView->setBoundaryReadOnly(true);
 
-    // === View 8 — 圆柱区域合并结果（左下）===
+    auto* middleOverlay = new QLabel(m_afterView);
+    middleOverlay->setObjectName("overlayPanel");
+    middleOverlay->setStyleSheet(overlayStyle);
+    middleOverlay->setText("  4. 裁剪并集  ");
+    middleOverlay->adjustSize();
+    middleOverlay->move(8, 8);
+    middleOverlay->show();
+
+    // === View 5 — 圆柱区域（左下）===
     auto* bottomFrame = new QFrame(this);
-    bottomFrame->setFrameStyle(QFrame::Box | QFrame::Plain);
+    bottomFrame->setFrameShape(QFrame::StyledPanel);
+    bottomFrame->setFrameShadow(QFrame::Sunken);
     auto* bottomLayout = new QVBoxLayout(bottomFrame);
     bottomLayout->setContentsMargins(0, 0, 0, 0);
-    bottomLayout->setSpacing(0);
+    bottomLayout->addWidget(m_mergedView = new Sketch2DView(bottomFrame));
 
-    auto* bottomLabel = new QLabel("8. 圆柱区域 (合并结果)", bottomFrame);
-    bottomLabel->setAlignment(Qt::AlignCenter);
-    bottomLabel->setStyleSheet("QLabel { background: #333; color: #ccc; font-size: 11px; padding: 2px; }");
-    bottomLayout->addWidget(bottomLabel);
-
-    m_mergedView = new Sketch2DView(bottomFrame);
     m_mergedView->setReadOnly(true);
-    bottomLayout->addWidget(m_mergedView);
+    m_mergedView->setBoundaryReadOnly(true);
+
+    auto* bottomOverlay = new QLabel(m_mergedView);
+    bottomOverlay->setObjectName("overlayPanel");
+    bottomOverlay->setStyleSheet(overlayStyle);
+    bottomOverlay->setText("  5. 圆柱区域  ");
+    bottomOverlay->adjustSize();
+    bottomOverlay->move(8, 8);
+    bottomOverlay->show();
 
     // === 右下角：3D圆柱视图占位 ===
     m_cylinderPlaceholder = new QWidget(this);
@@ -72,13 +86,16 @@ void PeriodicClippingViews::setupViews()
     phLayout->setContentsMargins(0, 0, 0, 0);
     phLayout->setSpacing(0);
 
-    // 添加到 2x2 网格
+    // === 2x2 网格布局 ===
+    auto* gridLayout = new QGridLayout(this);
+    gridLayout->setContentsMargins(0, 0, 0, 0);
+    gridLayout->setSpacing(2);
+
     gridLayout->addWidget(leftFrame, 0, 0);
     gridLayout->addWidget(middleFrame, 0, 1);
     gridLayout->addWidget(bottomFrame, 1, 0);
     gridLayout->addWidget(m_cylinderPlaceholder, 1, 1);
 
-    // 行列等分
     gridLayout->setRowStretch(0, 1);
     gridLayout->setRowStretch(1, 1);
     gridLayout->setColumnStretch(0, 1);
